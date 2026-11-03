@@ -2,6 +2,7 @@
   "name": "selection-reader-build",
   "private": true,
   "description": "Builds the Kokoro (local voice) bundle for the Selection Reader extension.",
+  "license": "GPL-3.0-or-later",
   "type": "module",
   "scripts": {
     "build": "node build.mjs"

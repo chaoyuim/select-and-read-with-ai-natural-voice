@@ -40,4 +40,8 @@ After changing files, click the extension's **Reload** button rather than removi
 
 ## Third-party software
 
-Kokoro runs through [kokoro-js](https://github.com/hexgrad/kokoro) and [Transformers.js](https://github.com/huggingface/transformers.js) (Apache-2.0) on [ONNX Runtime Web](https://github.com/microsoft/onnxruntime) (MIT), with the [Kokoro-82M](https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX) model (Apache-2.0). Text is turned into pronunciation by [phonemizer](https://github.com/xenova/phonemizer.js), which is built on eSpeak NG (GPL-3.0); keep that in mind before distributing a built copy.
+Kokoro runs through [kokoro-js](https://github.com/hexgrad/kokoro) and [Transformers.js](https://github.com/huggingface/transformers.js) (Apache-2.0) on [ONNX Runtime Web](https://github.com/microsoft/onnxruntime) (MIT), with the [Kokoro-82M](https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX) model (Apache-2.0). Text is turned into pronunciation by [phonemizer](https://github.com/xenova/phonemizer.js), which is built on eSpeak NG (GPL-3.0).
+
+## License
+
+GPL-3.0-or-later, see [LICENSE](LICENSE). The GPL fits the built extension, which includes eSpeak NG.
