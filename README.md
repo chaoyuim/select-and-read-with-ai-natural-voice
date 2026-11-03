@@ -44,4 +44,6 @@ Kokoro runs through [kokoro-js](https://github.com/hexgrad/kokoro) and [Transfor
 
 ## License
 
+Copyright (C) 2026 [chaoyuim](https://github.com/chaoyuim).
+
 GPL-3.0-or-later, see [LICENSE](LICENSE). The GPL fits the built extension, which includes eSpeak NG.
