@@ -1,7 +1,7 @@
 {
   "name": "selection-reader-build",
   "private": true,
-  "description": "Builds the Kokoro (local voice) bundle for the Selection Reader extension.",
+  "description": "Builds the Kokoro and Supertonic voice bundles for the Selection Reader extension.",
   "license": "MIT",
   "type": "module",
   "scripts": {

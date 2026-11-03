@@ -44,7 +44,7 @@ After changing files, click the extension's **Reload** button rather than removi
 
 Kokoro runs through [kokoro-js](https://github.com/hexgrad/kokoro) and [Transformers.js](https://github.com/huggingface/transformers.js) (Apache-2.0) on [ONNX Runtime Web](https://github.com/microsoft/onnxruntime) (MIT), with the [Kokoro-82M](https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX) model (Apache-2.0). Text is turned into pronunciation by [phonemizer](https://github.com/xenova/phonemizer.js), which is built on eSpeak NG (GPL-3.0).
 
-Supertonic 3 uses the [Supertonic](https://github.com/supertone-inc/supertonic) browser example (MIT) and the [Supertonic 3](https://huggingface.co/Supertone/supertonic-3) model weights (OpenRAIL-M). The weights are downloaded by `npm run build` and are not part of the GPL-licensed source.
+Supertonic 3 uses the [Supertonic](https://github.com/supertone-inc/supertonic) browser example (MIT) and the [Supertonic 3](https://huggingface.co/Supertone/supertonic-3) model weights (OpenRAIL-M). The weights are downloaded by `npm run build` and are not part of the MIT-licensed source.
 
 ## License
 
