@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <!-- Selection Reader: a highlighted text cursor (the selection) giving off sound waves. -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#4f8cff"/>
+      <stop offset="1" stop-color="#2456d6"/>
+    </linearGradient>
+  </defs>
+  <rect x="4" y="4" width="120" height="120" rx="28" fill="url(#bg)"/>
+  <!-- selection highlight behind the cursor -->
+  <rect x="22" y="40" width="34" height="48" rx="6" fill="#ffd54a"/>
+  <!-- text cursor (I-beam) -->
+  <g stroke="#fff" stroke-width="9" stroke-linecap="round" fill="none">
+    <path d="M56 30v68M44 30h24M44 98h24"/>
+    <!-- sound waves -->
+    <path d="M78 50a20 20 0 0 1 0 28"/>
+    <path d="M90 38a36 36 0 0 1 0 52"/>
+  </g>
+</svg>
