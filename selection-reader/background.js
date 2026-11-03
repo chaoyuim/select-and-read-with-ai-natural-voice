@@ -168,10 +168,15 @@ function toSupertonicChunks(text, lang) {
   }
   if (!sentences.length) return [];
 
-  const firstParts = splitLong(sentences[0], SUPERTONIC_FIRST_CHUNK);
-  const chunks = [firstParts[0]];
+  // The first chunk is kept short so reading starts sooner, but only broken at a comma,
+  // semicolon or colon: cut between plain words, Supertonic would end it like a whole
+  // sentence (it adds a full stop to text that doesn't end in punctuation).
+  const [head] = splitLong(sentences[0], SUPERTONIC_FIRST_CHUNK);
+  const first = /[,;:]$/.test(head) ? head : sentences[0];
+  const rest = sentences[0].slice(first.length).trim();
+  const chunks = [first];
   let current = '';
-  for (const sentence of [...firstParts.slice(1), ...sentences.slice(1)]) {
+  for (const sentence of [...(rest ? [rest] : []), ...sentences.slice(1)]) {
     const candidate = current ? `${current} ${sentence}` : sentence;
     if (candidate.length > max && current) {
       chunks.push(current);
