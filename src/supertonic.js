@@ -1,7 +1,7 @@
 // Selection Reader — Supertonic 3 player (runs in the extension's offscreen document).
 //
-// The fast local engine: four ONNX models and one style file per voice, run with four
-// denoising steps. The browser example this is based on (supertonic-helper.js) is MIT;
+// The fast local engine: four ONNX models and one style file per voice, run with 4 to
+// 16 denoising steps. The browser example this is based on (supertonic-helper.js) is MIT;
 // the model weights are OpenRAIL-M (see README).
 import * as ort from 'onnxruntime-web';
 import { loadTextToSpeech, loadVoiceStyle, writeWavFile } from './supertonic-helper.js';
@@ -9,13 +9,17 @@ import { loadTextToSpeech, loadVoiceStyle, writeWavFile } from './supertonic-hel
 const ONNX_DIR = chrome.runtime.getURL('models/supertonic/onnx');
 const VOICE_DIR = chrome.runtime.getURL('models/supertonic/voice_styles');
 const VOICES = new Set(['F1', 'F2', 'F3', 'F4', 'F5', 'M1', 'M2', 'M3', 'M4', 'M5']);
-const STEPS = new Set([4, 6, 8]); // 4 is the fastest; 8 sounds best, the popup picks
+// 4 is the fastest; 16 sounds best but only keeps up on a GPU (~11x real time on an
+// M5, ~1x on its CPU). The popup picks.
+const STEPS = new Set([4, 6, 8, 16]);
 const DEFAULT_STEPS = 4;
 
-// Shares the ONNX runtime (with its WebGPU backend), wasm files and CPU thread
-// setting with the Kokoro player.
+// The ONNX runtime's wasm ships inside the extension (extensions can't load code from
+// a CDN). CPU threads: the runtime's default (up to 4) leaves speed on the table, and
+// 8 measured faster on both an i7-6700 and an M5, so use the cores each machine has.
 ort.env.wasm.wasmPaths = chrome.runtime.getURL('vendor/ort/');
-ort.env.wasm.numThreads = Math.min(8, navigator.hardwareConcurrency || 4);
+export const cpuThreads = Math.min(8, navigator.hardwareConcurrency || 4);
+ort.env.wasm.numThreads = cpuThreads;
 
 // backend: 'webgpu' (GPU) or 'wasm' (CPU), chosen by backendFor in offscreen.js.
 // One copy of the models is kept loaded; switching backend loads them again.
@@ -54,10 +58,12 @@ function loadStyle(voice) {
 }
 
 // text is one chunk; background.js keeps these under the helper's 300-character split.
-export async function speakSupertonic(text, voice, steps = DEFAULT_STEPS, backend = 'wasm') {
+// speed: the speaking pace (0.9 is slower, 1.1 faster); the model times the speech
+// itself, so it sounds natural rather than stretched.
+export async function speakSupertonic(text, voice, steps = DEFAULT_STEPS, backend = 'wasm', speed = 1) {
   const [tts, style] = await Promise.all([loadSupertonic(backend), loadStyle(voice)]);
   const totalSteps = STEPS.has(Number(steps)) ? Number(steps) : DEFAULT_STEPS;
-  const { wav, duration } = await tts.call(text, 'en', style, totalSteps, 1);
+  const { wav, duration } = await tts.call(text, 'en', style, totalSteps, speed);
   const length = Math.min(wav.length, Math.floor(tts.sampleRate * duration[0]));
   const samples = Float32Array.from(wav.slice(0, length));
   const blob = new Blob([writeWavFile(samples, tts.sampleRate)], { type: 'audio/wav' });

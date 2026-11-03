@@ -5,14 +5,14 @@
 //   in the page: the page's speechSynthesis refuses to speak ("not-allowed") unless
 //   the page itself has had a recent click or key press, which a context-menu click
 //   or an extension shortcut doesn't count as.
-// - Kokoro, a voice model that runs locally in the offscreen document
+// - Supertonic, a voice model that runs locally in the offscreen document
 //   (offscreen.html), since a service worker can't run it or play audio.
 
 // ── Settings ─────────────────────────────────────────────
 // Saved by the popup in chrome.storage.sync: voiceName, rate, device ('auto' |
-// 'gpu' | 'cpu', for Kokoro and Supertonic), supertonicSteps and highlight
-// (highlight each word while reading).
-const DEFAULT_VOICE = 'kokoro:af_bella'; // Bella is bundled (see build.mjs), so a fresh install reads offline straight away
+// 'gpu' | 'cpu', for Supertonic), supertonicSteps and highlight (highlight each word
+// while reading).
+const DEFAULT_VOICE = 'supertonic:F1'; // bundled (see build.mjs), so a fresh install reads offline straight away
 // Speed presets, named like Edge's Read Aloud; the widget's speed button cycles them.
 const SPEEDS = [
   { label: 'Slow', rate: 0.9 },
@@ -21,15 +21,11 @@ const SPEEDS = [
 ];
 const DEFAULT_RATE = 1;
 const MAX_CHUNK = 220; // long sentences get split so network voices don't cut off
-// Kokoro can start speaking after the first phrase instead of waiting for a whole
-// long sentence; on a slow CPU this roughly halves the wait before the first word.
-const FIRST_CHUNK = 90; // only the first sentence is split this short
 const SUPERTONIC_CHUNK = 280; // Supertonic's helper splits at 300, so stay under it
 // Its per-request overhead is high, so longer chunks keep it faster than real time;
 // a shorter first chunk still gets the first word out sooner.
 const SUPERTONIC_FIRST_CHUNK = 120;
-const SUPERTONIC_STEPS = new Set([4, 6, 8]); // denoising steps, 4 is the fastest
-const KOKORO = 'kokoro:'; // prefix of Kokoro voice names, e.g. "kokoro:bf_emma"
+const SUPERTONIC_STEPS = new Set([4, 6, 8, 16]); // denoising steps, 4 is the fastest
 const SUPERTONIC = 'supertonic:'; // prefix of Supertonic voice names, e.g. "supertonic:F1"
 
 const settings = async () => ({
@@ -40,16 +36,13 @@ const settings = async () => ({
 // Denoising steps for Supertonic: the saved choice, or the fastest.
 const stepsOf = (prefs) => (SUPERTONIC_STEPS.has(Number(prefs.supertonicSteps)) ? Number(prefs.supertonicSteps) : 4);
 
-// Where each local engine's last speed test is kept in chrome.storage.local.
-const BENCH_KEYS = { kokoro: 'benchmark', supertonic: 'supertonicBenchmark' };
-
-// The device to run a local engine ('kokoro' or 'supertonic') on. 'auto' uses the
-// winner of that engine's last speed test (with a 10% margin, since a weak GPU can be
-// slower than the CPU); before any test it defers to the player, which prefers a real
-// GPU (see backendFor in offscreen.js).
-async function deviceFor(pref, engine) {
+// The device to run Supertonic on. 'auto' uses the winner of the last speed test
+// (chrome.storage.local.supertonicBenchmark, with a 10% margin, since a weak GPU can
+// be slower than the CPU); before any test it defers to the player, which prefers a
+// real GPU (see backendFor in offscreen.js).
+async function deviceFor(pref) {
   if (pref !== 'auto') return pref;
-  const { [BENCH_KEYS[engine]]: benchmark } = await chrome.storage.local.get(BENCH_KEYS[engine]);
+  const { supertonicBenchmark: benchmark } = await chrome.storage.local.get('supertonicBenchmark');
   const results = benchmark?.state === 'done' ? benchmark.results : [];
   const speed = (device) => results.find((r) => r.device === device && r.available)?.speed;
   const gpu = speed('gpu');
@@ -64,7 +57,7 @@ async function deviceFor(pref, engine) {
 const speedIndex = (rate) =>
   SPEEDS.reduce((best, s, i) => (Math.abs(s.rate - rate) < Math.abs(SPEEDS[best].rate - rate) ? i : best), 0);
 
-chrome.runtime.onInstalled.addListener(() => {
+chrome.runtime.onInstalled.addListener(async () => {
   chrome.contextMenus.create({
     id: 'read-selection',
     title: 'Read selection aloud',
@@ -75,11 +68,17 @@ chrome.runtime.onInstalled.addListener(() => {
     title: 'Stop reading',
     contexts: ['all'],
   });
+
+  // Kokoro was dropped for Supertonic: move its users to the default voice, and free
+  // what it stored (voice downloads, its speed test).
+  const { voiceName } = await chrome.storage.sync.get('voiceName');
+  if (voiceName?.startsWith('kokoro:')) await chrome.storage.sync.set({ voiceName: DEFAULT_VOICE });
+  chrome.storage.local.remove('benchmark');
+  for (const name of ['kokoro-voices', 'transformers-cache']) caches.delete(name);
 });
 
 // Voice picked in the popup first, then sensible fallbacks (e.g. on another machine).
 async function pickVoice(voiceName) {
-  if (voiceName.startsWith(KOKORO)) return { voiceName, kokoro: voiceName.slice(KOKORO.length) };
   if (voiceName.startsWith(SUPERTONIC)) return { voiceName, supertonic: voiceName.slice(SUPERTONIC.length) };
   const voices = await chrome.tts.getVoices();
   const voice =
@@ -93,15 +92,12 @@ async function pickVoice(voiceName) {
 }
 
 // Split the selection into sentences.
-function toChunks(text, firstMax = MAX_CHUNK) {
+function toChunks(text) {
   const segmenter = new Intl.Segmenter(undefined, { granularity: 'sentence' });
   const chunks = [];
-  let first = true;
   for (const { segment } of segmenter.segment(text)) {
     const sentence = segment.replace(/\s+/g, ' ').trim();
-    if (!sentence) continue;
-    chunks.push(...splitLong(sentence, first ? firstMax : MAX_CHUNK));
-    first = false;
+    if (sentence) chunks.push(...splitLong(sentence));
   }
   return chunks;
 }
@@ -128,8 +124,8 @@ function splitLong(sentence, max = MAX_CHUNK) {
   return out;
 }
 
-// Supertonic's per-request overhead is high, so it reads in longer chunks than Kokoro:
-// sentences are grouped up to 280 characters (its helper's own limit is 300), while
+// Supertonic's per-request overhead is high, so it reads in longer chunks than the
+// system voices: sentences are grouped up to 280 characters (its helper's own limit is 300), while
 // the first chunk stays shorter so the first word is heard sooner.
 function toSupertonicChunks(text) {
   const segmenter = new Intl.Segmenter(undefined, { granularity: 'sentence' });
@@ -242,7 +238,7 @@ async function ensureOffscreen() {
       // WORKERS as well, so Chrome doesn't close it after 30 s without audio and
       // throw away the loaded model.
       reasons: ['AUDIO_PLAYBACK', 'WORKERS'],
-      justification: 'Runs the local Kokoro voice model and plays the speech it generates.',
+      justification: 'Runs the local Supertonic voice model and plays the speech it generates.',
     })
     .finally(() => (creatingOffscreen = null));
   await creatingOffscreen;
@@ -253,12 +249,13 @@ const toOffscreen = (msg) =>
     // No offscreen document yet: nothing is playing there.
   });
 
-const kokoroEngine = {
+const supertonicEngine = {
   async speakFrom(s, start) {
     await ensureOffscreen();
     if (session !== s) return; // stopped while the document was being created
     toOffscreen({
-      type: 'speak', id: s.id, chunks: s.chunks, voice: s.voice.kokoro, rate: s.rate, device: s.device, start,
+      type: 'speak', id: s.id, chunks: s.chunks, voice: s.voice.supertonic,
+      rate: s.rate, device: s.device, steps: s.steps, start,
     });
   },
   pause: () => toOffscreen({ type: 'pause' }),
@@ -267,43 +264,22 @@ const kokoroEngine = {
   setRate: (s) => toOffscreen({ type: 'rate', rate: s.rate }), // applies mid-sentence
 };
 
-const supertonicEngine = {
-  async speakFrom(s, start) {
-    await ensureOffscreen();
-    if (session !== s) return;
-    toOffscreen({
-      type: 'supertonic-speak', id: s.id, chunks: s.chunks, voice: s.voice.supertonic,
-      rate: s.rate, device: s.device, steps: s.steps, start,
-    });
-  },
-  pause: () => toOffscreen({ type: 'pause' }),
-  resume: () => toOffscreen({ type: 'resume' }),
-  stop: () => toOffscreen({ type: 'stop' }),
-  setRate: (s) => toOffscreen({ type: 'rate', rate: s.rate }),
-};
-
 // Start loading the local model as soon as text is selected, so reading starts sooner.
 async function prepare() {
   const { voiceName, device } = await settings();
-  if (voiceName.startsWith(SUPERTONIC)) {
-    await ensureOffscreen();
-    toOffscreen({ type: 'load-supertonic', device: await deviceFor(device, 'supertonic') });
-    return;
-  }
-  if (!voiceName.startsWith(KOKORO)) return;
+  if (!voiceName.startsWith(SUPERTONIC)) return;
   await ensureOffscreen();
-  toOffscreen({ type: 'load', device: await deviceFor(device, 'kokoro') });
+  toOffscreen({ type: 'load', device: await deviceFor(device) });
 }
 
-// Time a local engine on the GPU and the CPU (popup's Test speed button); Supertonic
-// at the saved number of steps. Progress and results go to chrome.storage.local
-// (see BENCH_KEYS), where the popup reads them.
-async function benchmark(engine = 'kokoro') {
-  if (!BENCH_KEYS[engine]) return;
+// Time Supertonic on the GPU and the CPU at the saved number of steps (popup's Test
+// speed button). Progress and results go to chrome.storage.local.supertonicBenchmark,
+// where the popup reads them.
+async function benchmark() {
   const steps = stepsOf(await settings());
-  await chrome.storage.local.set({ [BENCH_KEYS[engine]]: { state: 'running', device: 'gpu', startedAt: Date.now() } });
+  await chrome.storage.local.set({ supertonicBenchmark: { state: 'running', device: 'gpu', startedAt: Date.now() } });
   await ensureOffscreen();
-  toOffscreen({ type: 'benchmark', engine, steps });
+  toOffscreen({ type: 'benchmark', steps });
 }
 
 // ── Reading ──────────────────────────────────────────────
@@ -312,7 +288,7 @@ async function benchmark(engine = 'kokoro') {
 //   status, wordOffsets, highlight }
 // tabId is null for the popup's sample; frameId is the frame whose widget shows the
 // player (0 = the page itself, others are iframes). index/total/paused/rate/status
-// are what the widget shows; status is set while Kokoro loads ("Loading voice…").
+// are what the widget shows; status is set while Supertonic loads ("Loading voice…").
 // wordOffsets[i] is how many words come before chunk i; highlight is whether to
 // send the widget each word as it's read.
 let session = null;
@@ -365,13 +341,9 @@ async function read(tabId, { text, frameId = 0, fromPage = true }) {
   stop();
   const prefs = await settings();
   const voice = await pickVoice(prefs.voiceName);
-  const engine = voice?.supertonic ? supertonicEngine : voice?.kokoro ? kokoroEngine : ttsEngine;
-  const device = engine === ttsEngine
-    ? prefs.device
-    : await deviceFor(prefs.device, engine === supertonicEngine ? 'supertonic' : 'kokoro');
-  const chunks = engine === supertonicEngine
-    ? toSupertonicChunks(text)
-    : toChunks(text, engine === kokoroEngine ? FIRST_CHUNK : MAX_CHUNK);
+  const engine = voice?.supertonic ? supertonicEngine : ttsEngine;
+  const device = engine === supertonicEngine ? await deviceFor(prefs.device) : prefs.device;
+  const chunks = engine === supertonicEngine ? toSupertonicChunks(text) : toChunks(text);
   const steps = stepsOf(prefs);
   let words = 0;
   const wordOffsets = chunks.map((chunk) => {
@@ -420,7 +392,7 @@ function finish() {
 function stop() {
   finish(); // clear the session first so the stop's "interrupted" events are ignored
   ttsEngine.stop();
-  kokoroEngine.stop(); // stops whichever local engine the offscreen page is playing
+  supertonicEngine.stop();
 }
 
 // Chrome stops an idle service worker after ~30 s, which would lose the session
@@ -466,26 +438,25 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
   // From the popup.
   if (msg.type === 'reader-sample') read(null, { text: msg.text, fromPage: false });
-  if (msg.type === 'reader-benchmark') benchmark(msg.engine);
+  if (msg.type === 'reader-benchmark') benchmark();
 
-  // From the local players (offscreen.js): Kokoro and Supertonic both report here.
-  if (msg.type === 'kokoro-benchmark') {
-    const { engine = 'kokoro', state, device, results, at } = msg;
+  // From the local player (offscreen.js).
+  if (msg.type === 'voice-benchmark') {
+    const { state, device, results, at } = msg;
     chrome.storage.local.set({
-      [BENCH_KEYS[engine]]: state === 'done' ? { state, results, at } : { state, device, startedAt: Date.now() },
+      supertonicBenchmark: state === 'done' ? { state, results, at } : { state, device, startedAt: Date.now() },
     });
     return;
   }
-  if (msg.type === 'kokoro-event') {
+  if (msg.type === 'voice-event') {
     const s = session;
     if (!s || s.id !== msg.id) return; // a reading that was replaced or stopped
     if (msg.event === 'loading' && s.index === 1) s.status = 'Loading voice…';
-    if (msg.event === 'progress') s.status = `Downloading voice ${msg.percent}%`;
     if (msg.event === 'word') return wordReached(s, msg.index, msg.word);
     if (msg.event === 'start') return sentenceStarted(s, msg.index);
     if (msg.event === 'end') return finish();
     if (msg.event === 'error') {
-      console.warn('[Selection Reader] Kokoro error:', msg.message);
+      console.warn('[Selection Reader] Supertonic error:', msg.message);
       return finish();
     }
     updateBar(s, barState(s));

@@ -72,7 +72,7 @@
     <section>
       <h2><label for="voice">Voice</label></h2>
       <select id="voice"></select>
-      <p class="hint" id="hint" hidden></p>
+      <p class="hint" id="hint" hidden>Supertonic 3 (English) runs on your computer, offline, at 44.1 kHz.</p>
     </section>
 
     <section>
@@ -80,8 +80,14 @@
       <div class="segmented" role="radiogroup" aria-labelledby="speed-title" id="speed"></div>
     </section>
 
+    <section id="supertonic" hidden>
+      <h2 id="steps-title">Supertonic quality</h2>
+      <div class="segmented" role="radiogroup" aria-labelledby="steps-title" id="steps"></div>
+      <p class="hint" id="steps-hint">4 steps is fastest; more steps sound better but are slower. 16 needs the GPU: on a CPU it can pause between sentences. Takes effect on the next reading.</p>
+    </section>
+
     <section id="local" hidden>
-      <h2 id="device-title">Kokoro and Supertonic run on</h2>
+      <h2 id="device-title">Supertonic runs on</h2>
       <div class="segmented" role="radiogroup" aria-labelledby="device-title" id="device">
         <label><input type="radio" name="device" value="auto"><span>Auto</span></label>
         <label><input type="radio" name="device" value="gpu"><span>GPU</span></label>
@@ -89,16 +95,10 @@
       </div>
       <p class="hint" id="device-hint"></p>
       <div class="row" style="margin-top: 10px">
-        <span class="hint" style="margin: 0" id="bench-question">How fast is each on this computer?</span>
+        <span class="hint" style="margin: 0">How fast is each on this computer?</span>
         <button id="bench-run">Test speed</button>
       </div>
       <div class="bench" id="bench" aria-live="polite"></div>
-    </section>
-
-    <section id="supertonic" hidden>
-      <h2 id="steps-title">Supertonic quality</h2>
-      <div class="segmented" role="radiogroup" aria-labelledby="steps-title" id="steps"></div>
-      <p class="hint" id="steps-hint">4 steps is fastest; 6 and 8 sound better but are slower. Takes effect on the next reading.</p>
     </section>
 
     <section>

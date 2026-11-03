@@ -1,8 +1,8 @@
-// Selection Reader — popup: voice, speed, where the local voices run (with a speed
-// test), Supertonic's quality and word highlighting. Everything is saved to chrome.storage.sync as soon as it
-// changes; background.js reads it when reading starts.
+// Selection Reader — popup: voice, speed, Supertonic's quality and where it runs
+// (with a speed test), and word highlighting. Everything is saved to
+// chrome.storage.sync as soon as it changes; background.js reads it when reading starts.
 
-const DEFAULT_VOICE = 'kokoro:af_bella'; // keep in step with background.js
+const DEFAULT_VOICE = 'supertonic:F1'; // keep in step with background.js
 // Keep in step with SPEEDS in background.js.
 const SPEEDS = [
   { label: 'Slow', rate: 0.9 },
@@ -11,17 +11,6 @@ const SPEEDS = [
 ];
 const $ = (id) => document.getElementById(id);
 const select = $('voice');
-const hint = $('hint');
-
-// Kokoro's better-rated English voices (grades A to C in kokoro-js); value is the
-// voice name background.js expects.
-const KOKORO_VOICES = [
-  ['af_heart', 'Heart', 'US'], ['af_bella', 'Bella', 'US'], ['af_nicole', 'Nicole', 'US'],
-  ['af_aoede', 'Aoede', 'US'], ['af_kore', 'Kore', 'US'], ['af_sarah', 'Sarah', 'US'],
-  ['af_nova', 'Nova', 'US'], ['af_alloy', 'Alloy', 'US'], ['am_fenrir', 'Fenrir', 'US'],
-  ['am_michael', 'Michael', 'US'], ['am_puck', 'Puck', 'US'], ['bf_emma', 'Emma', 'UK'],
-  ['bf_isabella', 'Isabella', 'UK'], ['bm_george', 'George', 'UK'], ['bm_fable', 'Fable', 'UK'],
-].map(([id, name, accent]) => ({ id, value: `kokoro:${id}`, text: `${name} (${accent})` }));
 
 // Supertonic 3's ten preset voices (F1-F5 female, M1-M5 male); all are bundled.
 const SUPERTONIC_VOICES = ['F1', 'F2', 'F3', 'F4', 'F5', 'M1', 'M2', 'M3', 'M4', 'M5'].map((id) => ({
@@ -30,47 +19,10 @@ const SUPERTONIC_VOICES = ['F1', 'F2', 'F3', 'F4', 'F5', 'M1', 'M2', 'M3', 'M4',
   text: `${id} (${id.startsWith('F') ? 'female' : 'male'})`,
 }));
 
-const isKokoro = () => select.value.startsWith('kokoro:');
 const isSupertonic = () => select.value.startsWith('supertonic:');
-// The selected local engine ('kokoro' or 'supertonic'), or null for other voices.
-const localEngine = () => (isKokoro() ? 'kokoro' : isSupertonic() ? 'supertonic' : null);
-const SUPERTONIC_STEPS = [4, 6, 8];
+const SUPERTONIC_STEPS = [4, 6, 8, 16];
 
 // ── Voice ────────────────────────────────────────────────
-
-// What Kokoro has on this computer: the shared model (~330 MB) and a small file per
-// voice, either bundled in the extension by `npm run build` (models/bundled.json) or
-// downloaded into the caches the offscreen player fills (same extension origin).
-async function kokoroDownloads() {
-  const bundled = await fetch('models/bundled.json').then((r) => r.json()).catch(() => null);
-  try {
-    const urls = async (name) => (await (await caches.open(name)).keys()).map((r) => r.url);
-    const [model, voices] = await Promise.all([urls('transformers-cache'), urls('kokoro-voices')]);
-    return {
-      hasModel: !!bundled || model.some((u) => /\/onnx\/model(_quantized)?\.onnx$/.test(u)),
-      voices: new Set([
-        ...(bundled?.voices ?? []),
-        ...voices.map((u) => u.match(/\/voices\/(\w+)\.bin$/)?.[1]),
-      ]),
-    };
-  } catch {
-    return { hasModel: !!bundled, voices: new Set(bundled?.voices) };
-  }
-}
-
-// Mark the Kokoro voices that are ready to use offline, and explain the rest.
-async function showKokoroDownloads() {
-  const { hasModel, voices } = await kokoroDownloads();
-  for (const v of KOKORO_VOICES) {
-    const option = select.querySelector(`option[value="${v.value}"]`);
-    if (option) option.text = hasModel && voices.has(v.id) ? `${v.text}  ✓ downloaded` : v.text;
-  }
-  if (isKokoro()) {
-    hint.textContent = hasModel
-      ? 'Runs on your computer. Voices marked ✓ work offline; the others download a small file (under 1 MB) the first time.'
-      : 'Runs on your computer. The first time, it downloads the voice model (about 330 MB) and takes a few seconds to start; after that it works offline.';
-  }
-}
 
 // items: [{ value, text }]
 function addGroup(label, items, current) {
@@ -81,29 +33,13 @@ function addGroup(label, items, current) {
   select.append(group);
 }
 
+// Supertonic's settings only matter when a Supertonic voice is picked.
 function showVoiceSettings() {
-  const kokoro = isKokoro();
   const supertonic = isSupertonic();
-  $('local').hidden = !(kokoro || supertonic);
-  $('supertonic').hidden = !supertonic;
-  if (kokoro || supertonic) {
-    $('bench-question').textContent = `How fast is ${ENGINE_NAMES[localEngine()]} on this computer?`;
-    showBenchmark();
-  }
-  hint.hidden = !(kokoro || supertonic);
-  if (kokoro) showKokoroDownloads();
-  else if (supertonic) {
-    hint.textContent = 'Supertonic 3 (English) runs on your computer at 44.1 kHz.';
-  }
+  for (const id of ['supertonic', 'local', 'hint']) $(id).hidden = !supertonic;
 }
 
-// ── Local voices: device and speed test ──────────────────
-// One device setting for both engines; each has its own speed test, which Auto uses.
-
-const ENGINE_NAMES = { kokoro: 'Kokoro', supertonic: 'Supertonic' };
-// Where background.js keeps each engine's last speed test in chrome.storage.local.
-const BENCH_KEYS = { kokoro: 'benchmark', supertonic: 'supertonicBenchmark' };
-const benchmarks = {}; // engine -> its last speed test
+// ── Supertonic: device and speed test ────────────────────
 
 const DEVICE_HINTS = {
   auto: 'Uses whichever your last speed test found faster; before one, the graphics card when there is a suitable one.',
@@ -115,13 +51,10 @@ function showDeviceHint(device) {
   $('device-hint').textContent = DEVICE_HINTS[device];
 }
 
-// The selected engine's speed test: { state: 'running', device } or { state: 'done',
-// results, at }, from chrome.storage.local (background.js keeps it there so it
+// The last speed test: { state: 'running', device } or { state: 'done', results, at },
+// from chrome.storage.local.supertonicBenchmark (background.js keeps it there so it
 // survives closing the popup).
-function showBenchmark() {
-  const engine = localEngine();
-  if (!engine) return;
-  let bench = benchmarks[engine];
+function showBenchmark(bench) {
   const box = $('bench');
   const button = $('bench-run');
   // A test that never finished (e.g. the browser closed meanwhile) doesn't block a new one.
@@ -157,7 +90,7 @@ function showBenchmark() {
           : 'The CPU is faster here, but neither keeps up comfortably: expect short pauses between sentences, or pick a system voice.'
         : gpu || cpu
           ? 'They are about as fast here; either is fine.'
-          : `Neither device could be tested; ${ENGINE_NAMES[engine]} will use the CPU.`;
+          : 'Neither device could be tested; Supertonic will use the CPU.';
   box.append(advice);
 }
 
@@ -173,15 +106,10 @@ function resultRow(name, speed, detail, kind = '') {
   return row;
 }
 
-$('bench-run').addEventListener('click', () =>
-  chrome.runtime.sendMessage({ type: 'reader-benchmark', engine: localEngine() }));
+$('bench-run').addEventListener('click', () => chrome.runtime.sendMessage({ type: 'reader-benchmark' }));
 
 chrome.storage.onChanged.addListener((changes, area) => {
-  if (area !== 'local') return;
-  for (const [engine, key] of Object.entries(BENCH_KEYS)) {
-    if (changes[key]) benchmarks[engine] = changes[key].newValue;
-  }
-  showBenchmark();
+  if (area === 'local' && changes.supertonicBenchmark) showBenchmark(changes.supertonicBenchmark.newValue);
 });
 
 // ── Setup ────────────────────────────────────────────────
@@ -207,12 +135,11 @@ function segmented(container, options, current, onPick) {
 }
 
 async function init() {
-  const [prefs, voices, stored] = await Promise.all([
+  const [prefs, voices, { supertonicBenchmark }] = await Promise.all([
     chrome.storage.sync.get(['voiceName', 'rate', 'device', 'highlight', 'supertonicSteps']),
     chrome.tts.getVoices(),
-    chrome.storage.local.get(Object.values(BENCH_KEYS)),
+    chrome.storage.local.get('supertonicBenchmark'),
   ]);
-  for (const [engine, key] of Object.entries(BENCH_KEYS)) benchmarks[engine] = stored[key];
   const { voiceName = DEFAULT_VOICE, rate = 1, device = 'auto', highlight = true, supertonicSteps = 4 } = prefs;
 
   // Only the natural-sounding voices: the system's downloaded Premium/Enhanced voices
@@ -226,8 +153,7 @@ async function init() {
   const shown = voices
     .filter((v) => (isNatural(v) && inMyLanguage(v)) || v.voiceName === voiceName)
     .sort(byName);
-  addGroup('Kokoro (runs on this computer)', KOKORO_VOICES, voiceName);
-  addGroup('Supertonic (local, fast)', SUPERTONIC_VOICES, voiceName);
+  addGroup('Supertonic (runs on this computer)', SUPERTONIC_VOICES, voiceName);
   addGroup('System voices', shown.filter((v) => !v.remote).map(toItem), voiceName);
   addGroup('Online', shown.filter((v) => v.remote).map(toItem), voiceName);
   showVoiceSettings();
@@ -239,7 +165,7 @@ async function init() {
     saved();
   });
 
-  // Supertonic: 4 steps is fast, 8 is the best quality; applies to the next reading.
+  // Supertonic: 4 steps is fast, 16 is the best quality; applies to the next reading.
   const steps = SUPERTONIC_STEPS.includes(Number(supertonicSteps)) ? Number(supertonicSteps) : 4;
   segmented($('steps'), SUPERTONIC_STEPS.map((n) => ({ value: n, label: `${n} steps` })), steps, async (v) => {
     await chrome.storage.sync.set({ supertonicSteps: Number(v) });
@@ -253,7 +179,7 @@ async function init() {
     showDeviceHint(e.target.value);
     saved();
   });
-  showBenchmark();
+  showBenchmark(supertonicBenchmark);
 
   $('highlight').checked = highlight;
   $('highlight').addEventListener('change', async (e) => {
@@ -262,18 +188,13 @@ async function init() {
   });
 }
 
-// A Kokoro sentence starting means its model and voice are now downloaded.
-chrome.runtime.onMessage.addListener((msg) => {
-  if (msg.type === 'kokoro-event' && msg.event === 'start' && isKokoro()) showKokoroDownloads();
-});
-
 select.addEventListener('change', async () => {
   await chrome.storage.sync.set({ voiceName: select.value });
   showVoiceSettings();
   saved();
 });
 
-// Played by the background script with the saved settings, so Kokoro voices work here too.
+// Played by the background script with the saved settings, so Supertonic voices work here too.
 $('test').addEventListener('click', () => {
   chrome.runtime.sendMessage({
     type: 'reader-sample',

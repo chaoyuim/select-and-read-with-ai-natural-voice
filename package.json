@@ -1,16 +1,16 @@
 {
   "name": "selection-reader-build",
   "private": true,
-  "description": "Builds the Kokoro and Supertonic voice bundles for the Selection Reader extension.",
+  "description": "Builds the Supertonic voice bundle for the Selection Reader extension.",
   "license": "MIT",
   "type": "module",
   "scripts": {
     "build": "node build.mjs"
   },
-  "dependencies": {
-    "kokoro-js": "1.2.1"
-  },
   "devDependencies": {
     "esbuild": "0.28.2"
+  },
+  "dependencies": {
+    "onnxruntime-web": "1.22.0"
   }
 }
