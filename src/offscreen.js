@@ -27,23 +27,23 @@ const bundled = fetch(chrome.runtime.getURL('models/bundled.json'))
 const post = (msg) => chrome.runtime.sendMessage({ type: 'kokoro-event', ...msg }).catch(() => {});
 
 // ── Model ────────────────────────────────────────────────
-// device: 'gpu' (WebGPU), 'cpu' (WebAssembly, multi-threaded since the page is
-// cross-origin isolated, see manifest.json) or 'auto'. Auto skips "fallback"
-// adapters (software rendering, e.g. a PC without a graphics driver), which are
-// slower than the CPU path; 'gpu' uses any adapter. Without one, both use the CPU.
-// Only one model is kept loaded; switching device loads it again.
+// device (both engines): 'gpu' (WebGPU), 'cpu' (WebAssembly, multi-threaded since
+// the page is cross-origin isolated, see manifest.json) or 'auto'. Auto skips
+// "fallback" adapters (software rendering, e.g. a PC without a graphics driver),
+// which are slower than the CPU path; 'gpu' uses any adapter. Without one, both use
+// the CPU. Only one Kokoro model is kept loaded; switching device loads it again.
 let loaded = null; // { key, promise }
 
 const gpuAdapter = async () => (await navigator.gpu?.requestAdapter().catch(() => null)) ?? null;
 
-async function resolveDevice(device, dtype) {
+// The ONNX runtime backend a device setting means: 'webgpu' or 'wasm'.
+async function backendFor(device) {
   const adapter = device === 'cpu' ? null : await gpuAdapter();
-  const useGpu = adapter && (device === 'gpu' || !adapter.info?.isFallbackAdapter);
-  return { device: useGpu ? 'webgpu' : 'wasm', dtype: dtype ?? 'fp32' };
+  return adapter && (device === 'gpu' || !adapter.info?.isFallbackAdapter) ? 'webgpu' : 'wasm';
 }
 
 async function loadModel(device = 'auto', id, dtype) {
-  const options = await resolveDevice(device, dtype);
+  const options = { device: await backendFor(device), dtype: dtype ?? 'fp32' };
   const key = `${options.device}/${options.dtype}`;
   if (loaded?.key === key) return loaded.promise;
 
@@ -115,7 +115,9 @@ function generateKokoro(job, i) {
 function generateSupertonic(job, i) {
   return enqueue(async () => {
     if (job.cancelled) return null;
-    const { blob, samples, sampleRate } = await speakSupertonic(job.chunks[i], job.voice, job.steps);
+    const { blob, samples, sampleRate } = await speakSupertonic(
+      job.chunks[i], job.voice, job.steps, await backendFor(job.device),
+    );
     return {
       blob,
       wordStarts: estimateWordStarts(job.chunks[i], { audio: samples, sampling_rate: sampleRate }),
@@ -222,46 +224,64 @@ function stop() {
 }
 
 // ── Benchmark ────────────────────────────────────────────
-// Times loading the model and reading a sentence on each device. `speed` is how
+// Times loading an engine and reading a sentence on each device. `speed` is how
 // many seconds of speech are made per second (above 1 keeps up with playback).
-// A run can name a dtype to compare model variants (fp32 measured faster than q8
-// on the CPU here too: 0.87x against 0.45x real time on an i7-6700).
+// A Kokoro run can name a dtype to compare model variants (fp32 measured faster
+// than q8 on the CPU here too: 0.87x against 0.45x real time on an i7-6700).
 const BENCHMARK_TEXT =
   'The quick brown fox jumps over the lazy dog, then it runs back into the forest to rest for the night.';
 
-function benchmark(runs) {
+// Loads an engine on a device and returns a function that reads text with it.
+const benchEngines = {
+  async kokoro(device, { dtype }) {
+    const voice = (await bundled)?.voices[0] ?? 'af_heart';
+    await useBundledVoice(voice);
+    const tts = await loadModel(device, undefined, dtype);
+    return (text) => tts.generate(text, { voice });
+  },
+  async supertonic(device, { steps }) {
+    const backend = await backendFor(device);
+    await loadSupertonic(backend);
+    return async (text) => {
+      const { samples, sampleRate } = await speakSupertonic(text, 'F1', steps, backend);
+      return { audio: samples, sampling_rate: sampleRate };
+    };
+  },
+};
+
+function benchmark(runs, engine = 'kokoro', steps) {
   return enqueue(async () => {
     const results = [];
     for (const { device, dtype } of runs) {
-      const postBench = (state, extra) => chrome.runtime.sendMessage({ type: 'kokoro-benchmark', state, device, ...extra }).catch(() => {});
+      const postBench = (state, extra) =>
+        chrome.runtime.sendMessage({ type: 'kokoro-benchmark', engine, state, device, ...extra }).catch(() => {});
       postBench('running');
       try {
         if (device === 'gpu' && !(await gpuAdapter())) {
           results.push({ device, available: false, error: 'No WebGPU-capable GPU' });
           continue;
         }
-        const voice = (await bundled)?.voices[0] ?? 'af_heart';
-        await useBundledVoice(voice);
         let t = performance.now();
-        const tts = await loadModel(device, undefined, dtype);
+        const say = await benchEngines[engine](device, { dtype, steps });
         const loadMs = performance.now() - t;
         t = performance.now();
-        await tts.generate(BENCHMARK_TEXT, { voice }); // first run includes warm-up
+        await say(BENCHMARK_TEXT); // first run includes warm-up
         const firstMs = performance.now() - t;
         t = performance.now();
-        const out = await tts.generate(BENCHMARK_TEXT, { voice });
+        const out = await say(BENCHMARK_TEXT);
         const ms = performance.now() - t;
         const seconds = out.audio.length / out.sampling_rate;
         results.push({
-          device, dtype: dtype ?? 'fp32', available: true, loadMs: Math.round(loadMs),
-          firstMs: Math.round(firstMs), ms: Math.round(ms), speed: +(seconds / (ms / 1000)).toFixed(1),
+          device, ...(engine === 'kokoro' ? { dtype: dtype ?? 'fp32' } : { steps }), available: true,
+          loadMs: Math.round(loadMs), firstMs: Math.round(firstMs), ms: Math.round(ms),
+          speed: +(seconds / (ms / 1000)).toFixed(1),
           threads: device === 'cpu' ? env.backends.onnx.wasm.numThreads : undefined,
         });
       } catch (err) {
         results.push({ device, available: false, error: String(err?.message ?? err) });
       }
     }
-    chrome.runtime.sendMessage({ type: 'kokoro-benchmark', state: 'done', results, at: Date.now() }).catch(() => {});
+    chrome.runtime.sendMessage({ type: 'kokoro-benchmark', engine, state: 'done', results, at: Date.now() }).catch(() => {});
     return results;
   });
 }
@@ -273,7 +293,7 @@ chrome.runtime.onMessage.addListener((msg) => {
       enqueue(() => loadModel(msg.device, msg.id)).catch(() => {});
       break;
     case 'load-supertonic':
-      enqueue(() => loadSupertonic()).catch(() => {});
+      enqueue(async () => loadSupertonic(await backendFor(msg.device))).catch(() => {});
       break;
     case 'speak':
       stop();
@@ -307,7 +327,7 @@ chrome.runtime.onMessage.addListener((msg) => {
       stop();
       break;
     case 'benchmark':
-      benchmark(msg.runs ?? [{ device: 'gpu' }, { device: 'cpu' }]);
+      benchmark(msg.runs ?? [{ device: 'gpu' }, { device: 'cpu' }], msg.engine, msg.steps);
       break;
   }
 });

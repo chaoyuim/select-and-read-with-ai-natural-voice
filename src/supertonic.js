@@ -12,22 +12,34 @@ const VOICES = new Set(['F1', 'F2', 'F3', 'F4', 'F5', 'M1', 'M2', 'M3', 'M4', 'M
 const STEPS = new Set([4, 6, 8]); // 4 is the fastest; 8 sounds best, the popup picks
 const DEFAULT_STEPS = 4;
 
-// Shares the ONNX runtime, wasm files and CPU thread setting with the Kokoro player.
+// Shares the ONNX runtime (with its WebGPU backend), wasm files and CPU thread
+// setting with the Kokoro player.
 ort.env.wasm.wasmPaths = chrome.runtime.getURL('vendor/ort/');
 ort.env.wasm.numThreads = Math.min(8, navigator.hardwareConcurrency || 4);
 
-let loaded = null;
+// backend: 'webgpu' (GPU) or 'wasm' (CPU), chosen by backendFor in offscreen.js.
+// One copy of the models is kept loaded; switching backend loads them again.
+let loaded = null; // { backend, promise }
 const styles = new Map();
 
-export function loadSupertonic() {
-  if (!loaded) {
-    loaded = loadTextToSpeech(ONNX_DIR, {
-      executionProviders: ['wasm'],
+const release = (tts) =>
+  Promise.all([tts.dpOrt, tts.textEncOrt, tts.vectorEstOrt, tts.vocoderOrt].map((session) => session.release()));
+
+export function loadSupertonic(backend = 'wasm') {
+  if (loaded?.backend === backend) return loaded.promise;
+  const previous = loaded;
+  const promise = (async () => {
+    await previous?.promise.then(release).catch(() => {});
+    const { textToSpeech } = await loadTextToSpeech(ONNX_DIR, {
+      executionProviders: [backend],
       graphOptimizationLevel: 'all',
-    }).then(({ textToSpeech }) => textToSpeech);
-    loaded.catch(() => loaded = null); // let a later attempt retry
-  }
-  return loaded;
+    });
+    console.info('[Selection Reader] Supertonic ready on', backend);
+    return textToSpeech;
+  })();
+  loaded = { backend, promise };
+  promise.catch(() => loaded?.promise === promise && (loaded = null)); // let a later attempt retry
+  return promise;
 }
 
 function loadStyle(voice) {
@@ -42,8 +54,8 @@ function loadStyle(voice) {
 }
 
 // text is one chunk; background.js keeps these under the helper's 300-character split.
-export async function speakSupertonic(text, voice, steps = DEFAULT_STEPS) {
-  const [tts, style] = await Promise.all([loadSupertonic(), loadStyle(voice)]);
+export async function speakSupertonic(text, voice, steps = DEFAULT_STEPS, backend = 'wasm') {
+  const [tts, style] = await Promise.all([loadSupertonic(backend), loadStyle(voice)]);
   const totalSteps = STEPS.has(Number(steps)) ? Number(steps) : DEFAULT_STEPS;
   const { wav, duration } = await tts.call(text, 'en', style, totalSteps, 1);
   const length = Math.min(wav.length, Math.floor(tts.sampleRate * duration[0]));

@@ -80,8 +80,8 @@
       <div class="segmented" role="radiogroup" aria-labelledby="speed-title" id="speed"></div>
     </section>
 
-    <section id="kokoro" hidden>
-      <h2 id="device-title">Kokoro runs on</h2>
+    <section id="local" hidden>
+      <h2 id="device-title">Kokoro and Supertonic run on</h2>
       <div class="segmented" role="radiogroup" aria-labelledby="device-title" id="device">
         <label><input type="radio" name="device" value="auto"><span>Auto</span></label>
         <label><input type="radio" name="device" value="gpu"><span>GPU</span></label>
@@ -89,7 +89,7 @@
       </div>
       <p class="hint" id="device-hint"></p>
       <div class="row" style="margin-top: 10px">
-        <span class="hint" style="margin: 0">How fast is each on this computer?</span>
+        <span class="hint" style="margin: 0" id="bench-question">How fast is each on this computer?</span>
         <button id="bench-run">Test speed</button>
       </div>
       <div class="bench" id="bench" aria-live="polite"></div>

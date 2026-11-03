@@ -5,7 +5,7 @@ A Chrome and Edge extension that reads the text you select aloud, sentence by se
 - Select text and click the floating **▶ Read** button; it turns into a player (pause, speed, stop).
 - Each word is highlighted as it's read.
 - Voices: Kokoro (local, offline after setup, default **Bella**), Supertonic 3 (local, English for now, faster, with 4, 6 or 8 denoising steps), the system's Premium/Enhanced voices, and Edge's Microsoft Natural voices in Edge.
-- Kokoro runs on the GPU (WebGPU) or the CPU; the popup's speed test measures both, and Auto then uses whichever was faster.
+- Kokoro and Supertonic run on the GPU (WebGPU) or the CPU; the popup's speed test measures both for the selected voice, and Auto then uses whichever was faster.
 - Works inside iframes (e.g. e-learning lessons). Shortcuts: Alt+R read, Alt+P pause/resume, Alt+S stop.
 
 ## Set up
@@ -33,7 +33,7 @@ After changing files, click the extension's **Reload** button rather than removi
 | `selection-reader/manifest.json` | Extension manifest |
 | `selection-reader/background.js` | Service worker: reading sessions, system voices (`chrome.tts`), messages |
 | `selection-reader/page.js` | Floating Read button and player, word highlighting (runs in every frame) |
-| `selection-reader/popup.html`, `popup.js` | Settings: voice, speed, Kokoro GPU/CPU and speed test, highlighting |
+| `selection-reader/popup.html`, `popup.js` | Settings: voice, speed, GPU/CPU for the local voices and speed test, Supertonic quality, highlighting |
 | `selection-reader/offscreen.html` | Hidden page that runs the local voices and plays their audio |
 | `src/offscreen.js` | Source of the local player (built into `selection-reader/offscreen.js`) |
 | `src/supertonic.js` | Supertonic 3 engine: four ONNX models, 4/6/8 denoising steps, 44.1 kHz |

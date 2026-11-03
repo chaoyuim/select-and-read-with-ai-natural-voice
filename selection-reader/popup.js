@@ -1,5 +1,5 @@
-// Selection Reader — popup: voice, speed, where Kokoro runs (with a speed test),
-// and word highlighting. Everything is saved to chrome.storage.sync as soon as it
+// Selection Reader — popup: voice, speed, where the local voices run (with a speed
+// test), Supertonic's quality and word highlighting. Everything is saved to chrome.storage.sync as soon as it
 // changes; background.js reads it when reading starts.
 
 const DEFAULT_VOICE = 'kokoro:af_bella'; // keep in step with background.js
@@ -32,6 +32,8 @@ const SUPERTONIC_VOICES = ['F1', 'F2', 'F3', 'F4', 'F5', 'M1', 'M2', 'M3', 'M4',
 
 const isKokoro = () => select.value.startsWith('kokoro:');
 const isSupertonic = () => select.value.startsWith('supertonic:');
+// The selected local engine ('kokoro' or 'supertonic'), or null for other voices.
+const localEngine = () => (isKokoro() ? 'kokoro' : isSupertonic() ? 'supertonic' : null);
 const SUPERTONIC_STEPS = [4, 6, 8];
 
 // ── Voice ────────────────────────────────────────────────
@@ -82,8 +84,12 @@ function addGroup(label, items, current) {
 function showVoiceSettings() {
   const kokoro = isKokoro();
   const supertonic = isSupertonic();
-  $('kokoro').hidden = !kokoro;
+  $('local').hidden = !(kokoro || supertonic);
   $('supertonic').hidden = !supertonic;
+  if (kokoro || supertonic) {
+    $('bench-question').textContent = `How fast is ${ENGINE_NAMES[localEngine()]} on this computer?`;
+    showBenchmark();
+  }
   hint.hidden = !(kokoro || supertonic);
   if (kokoro) showKokoroDownloads();
   else if (supertonic) {
@@ -91,7 +97,13 @@ function showVoiceSettings() {
   }
 }
 
-// ── Kokoro device and speed test ─────────────────────────
+// ── Local voices: device and speed test ──────────────────
+// One device setting for both engines; each has its own speed test, which Auto uses.
+
+const ENGINE_NAMES = { kokoro: 'Kokoro', supertonic: 'Supertonic' };
+// Where background.js keeps each engine's last speed test in chrome.storage.local.
+const BENCH_KEYS = { kokoro: 'benchmark', supertonic: 'supertonicBenchmark' };
+const benchmarks = {}; // engine -> its last speed test
 
 const DEVICE_HINTS = {
   auto: 'Uses whichever your last speed test found faster; before one, the graphics card when there is a suitable one.',
@@ -103,9 +115,13 @@ function showDeviceHint(device) {
   $('device-hint').textContent = DEVICE_HINTS[device];
 }
 
-// state: { state: 'running', device } or { state: 'done', results, at }, from
-// chrome.storage.local (background.js keeps it there so it survives closing the popup).
-function showBenchmark(bench) {
+// The selected engine's speed test: { state: 'running', device } or { state: 'done',
+// results, at }, from chrome.storage.local (background.js keeps it there so it
+// survives closing the popup).
+function showBenchmark() {
+  const engine = localEngine();
+  if (!engine) return;
+  let bench = benchmarks[engine];
   const box = $('bench');
   const button = $('bench-run');
   // A test that never finished (e.g. the browser closed meanwhile) doesn't block a new one.
@@ -124,7 +140,8 @@ function showBenchmark(bench) {
       box.append(resultRow(name, 'Not available', r.error ?? ''));
       continue;
     }
-    const detail = `ready in ${(r.loadMs / 1000).toFixed(1)} s, first sentence ${(r.firstMs / 1000).toFixed(1)} s`;
+    const detail = `ready in ${(r.loadMs / 1000).toFixed(1)} s, first sentence ${(r.firstMs / 1000).toFixed(1)} s`
+      + (r.steps ? `, ${r.steps} steps` : '');
     box.append(resultRow(name, `${r.speed}× real time`, detail, r.speed >= 1.3 ? 'ok' : 'slow'));
   }
   const [gpu, cpu] = ['gpu', 'cpu'].map((d) => bench.results.find((r) => r.device === d && r.available));
@@ -140,7 +157,7 @@ function showBenchmark(bench) {
           : 'The CPU is faster here, but neither keeps up comfortably: expect short pauses between sentences, or pick a system voice.'
         : gpu || cpu
           ? 'They are about as fast here; either is fine.'
-          : 'Neither device could be tested; Kokoro will use the CPU.';
+          : `Neither device could be tested; ${ENGINE_NAMES[engine]} will use the CPU.`;
   box.append(advice);
 }
 
@@ -156,10 +173,15 @@ function resultRow(name, speed, detail, kind = '') {
   return row;
 }
 
-$('bench-run').addEventListener('click', () => chrome.runtime.sendMessage({ type: 'reader-benchmark' }));
+$('bench-run').addEventListener('click', () =>
+  chrome.runtime.sendMessage({ type: 'reader-benchmark', engine: localEngine() }));
 
 chrome.storage.onChanged.addListener((changes, area) => {
-  if (area === 'local' && changes.benchmark) showBenchmark(changes.benchmark.newValue);
+  if (area !== 'local') return;
+  for (const [engine, key] of Object.entries(BENCH_KEYS)) {
+    if (changes[key]) benchmarks[engine] = changes[key].newValue;
+  }
+  showBenchmark();
 });
 
 // ── Setup ────────────────────────────────────────────────
@@ -185,11 +207,12 @@ function segmented(container, options, current, onPick) {
 }
 
 async function init() {
-  const [prefs, voices, { benchmark }] = await Promise.all([
+  const [prefs, voices, stored] = await Promise.all([
     chrome.storage.sync.get(['voiceName', 'rate', 'device', 'highlight', 'supertonicSteps']),
     chrome.tts.getVoices(),
-    chrome.storage.local.get('benchmark'),
+    chrome.storage.local.get(Object.values(BENCH_KEYS)),
   ]);
+  for (const [engine, key] of Object.entries(BENCH_KEYS)) benchmarks[engine] = stored[key];
   const { voiceName = DEFAULT_VOICE, rate = 1, device = 'auto', highlight = true, supertonicSteps = 4 } = prefs;
 
   // Only the natural-sounding voices: the system's downloaded Premium/Enhanced voices
@@ -230,7 +253,7 @@ async function init() {
     showDeviceHint(e.target.value);
     saved();
   });
-  showBenchmark(benchmark);
+  showBenchmark();
 
   $('highlight').checked = highlight;
   $('highlight').addEventListener('change', async (e) => {

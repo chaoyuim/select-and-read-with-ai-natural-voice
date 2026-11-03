@@ -10,7 +10,8 @@
 
 // ── Settings ─────────────────────────────────────────────
 // Saved by the popup in chrome.storage.sync: voiceName, rate, device ('auto' |
-// 'gpu' | 'cpu', for Kokoro) and highlight (highlight each word while reading).
+// 'gpu' | 'cpu', for Kokoro and Supertonic), supertonicSteps and highlight
+// (highlight each word while reading).
 const DEFAULT_VOICE = 'kokoro:af_bella'; // Bella is bundled (see build.mjs), so a fresh install reads offline straight away
 // Speed presets, named like Edge's Read Aloud; the widget's speed button cycles them.
 const SPEEDS = [
@@ -36,12 +37,19 @@ const settings = async () => ({
   ...(await chrome.storage.sync.get(['voiceName', 'rate', 'device', 'highlight', 'supertonicSteps'])),
 });
 
-// The device to run Kokoro on. 'auto' uses the winner of the last speed test (with a
-// 10% margin, since a weak GPU can be slower than the CPU); before any test it defers
-// to the player, which prefers a real GPU (see resolveDevice in offscreen.js).
-async function deviceFor(pref) {
+// Denoising steps for Supertonic: the saved choice, or the fastest.
+const stepsOf = (prefs) => (SUPERTONIC_STEPS.has(Number(prefs.supertonicSteps)) ? Number(prefs.supertonicSteps) : 4);
+
+// Where each local engine's last speed test is kept in chrome.storage.local.
+const BENCH_KEYS = { kokoro: 'benchmark', supertonic: 'supertonicBenchmark' };
+
+// The device to run a local engine ('kokoro' or 'supertonic') on. 'auto' uses the
+// winner of that engine's last speed test (with a 10% margin, since a weak GPU can be
+// slower than the CPU); before any test it defers to the player, which prefers a real
+// GPU (see backendFor in offscreen.js).
+async function deviceFor(pref, engine) {
   if (pref !== 'auto') return pref;
-  const { benchmark } = await chrome.storage.local.get('benchmark');
+  const { [BENCH_KEYS[engine]]: benchmark } = await chrome.storage.local.get(BENCH_KEYS[engine]);
   const results = benchmark?.state === 'done' ? benchmark.results : [];
   const speed = (device) => results.find((r) => r.device === device && r.available)?.speed;
   const gpu = speed('gpu');
@@ -265,7 +273,7 @@ const supertonicEngine = {
     if (session !== s) return;
     toOffscreen({
       type: 'supertonic-speak', id: s.id, chunks: s.chunks, voice: s.voice.supertonic,
-      rate: s.rate, steps: s.steps, start,
+      rate: s.rate, device: s.device, steps: s.steps, start,
     });
   },
   pause: () => toOffscreen({ type: 'pause' }),
@@ -279,20 +287,23 @@ async function prepare() {
   const { voiceName, device } = await settings();
   if (voiceName.startsWith(SUPERTONIC)) {
     await ensureOffscreen();
-    toOffscreen({ type: 'load-supertonic' });
+    toOffscreen({ type: 'load-supertonic', device: await deviceFor(device, 'supertonic') });
     return;
   }
   if (!voiceName.startsWith(KOKORO)) return;
   await ensureOffscreen();
-  toOffscreen({ type: 'load', device: await deviceFor(device) });
+  toOffscreen({ type: 'load', device: await deviceFor(device, 'kokoro') });
 }
 
-// Time Kokoro on the GPU and the CPU (popup's Benchmark button). Progress and
-// results go to chrome.storage.local.benchmark, where the popup reads them.
-async function benchmark() {
-  await chrome.storage.local.set({ benchmark: { state: 'running', device: 'gpu', startedAt: Date.now() } });
+// Time a local engine on the GPU and the CPU (popup's Test speed button); Supertonic
+// at the saved number of steps. Progress and results go to chrome.storage.local
+// (see BENCH_KEYS), where the popup reads them.
+async function benchmark(engine = 'kokoro') {
+  if (!BENCH_KEYS[engine]) return;
+  const steps = stepsOf(await settings());
+  await chrome.storage.local.set({ [BENCH_KEYS[engine]]: { state: 'running', device: 'gpu', startedAt: Date.now() } });
   await ensureOffscreen();
-  toOffscreen({ type: 'benchmark' });
+  toOffscreen({ type: 'benchmark', engine, steps });
 }
 
 // ── Reading ──────────────────────────────────────────────
@@ -355,11 +366,13 @@ async function read(tabId, { text, frameId = 0, fromPage = true }) {
   const prefs = await settings();
   const voice = await pickVoice(prefs.voiceName);
   const engine = voice?.supertonic ? supertonicEngine : voice?.kokoro ? kokoroEngine : ttsEngine;
-  const device = engine === kokoroEngine ? await deviceFor(prefs.device) : prefs.device;
+  const device = engine === ttsEngine
+    ? prefs.device
+    : await deviceFor(prefs.device, engine === supertonicEngine ? 'supertonic' : 'kokoro');
   const chunks = engine === supertonicEngine
     ? toSupertonicChunks(text)
     : toChunks(text, engine === kokoroEngine ? FIRST_CHUNK : MAX_CHUNK);
-  const steps = SUPERTONIC_STEPS.has(Number(prefs.supertonicSteps)) ? Number(prefs.supertonicSteps) : 4;
+  const steps = stepsOf(prefs);
   let words = 0;
   const wordOffsets = chunks.map((chunk) => {
     const before = words;
@@ -453,13 +466,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
   // From the popup.
   if (msg.type === 'reader-sample') read(null, { text: msg.text, fromPage: false });
-  if (msg.type === 'reader-benchmark') benchmark();
+  if (msg.type === 'reader-benchmark') benchmark(msg.engine);
 
   // From the local players (offscreen.js): Kokoro and Supertonic both report here.
   if (msg.type === 'kokoro-benchmark') {
-    const { state, device, results, at } = msg;
+    const { engine = 'kokoro', state, device, results, at } = msg;
     chrome.storage.local.set({
-      benchmark: state === 'done' ? { state, results, at } : { state, device, startedAt: Date.now() },
+      [BENCH_KEYS[engine]]: state === 'done' ? { state, results, at } : { state, device, startedAt: Date.now() },
     });
     return;
   }
