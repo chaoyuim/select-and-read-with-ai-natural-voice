@@ -1,6 +1,7 @@
 // Selection Reader — popup: voice, speed, Supertonic's quality and where it runs
-// (with a speed test), and word highlighting. Everything is saved to
-// chrome.storage.sync as soon as it changes; background.js reads it when reading starts.
+// (with a speed test and the user's own server), and word highlighting. Everything is
+// saved to chrome.storage.sync as soon as it changes (the server's address and key to
+// chrome.storage.local); background.js reads it when reading starts.
 
 const DEFAULT_VOICE = 'supertonic:F1'; // keep in step with background.js
 // Keep in step with SPEEDS in background.js.
@@ -39,16 +40,30 @@ function showVoiceSettings() {
   for (const id of ['supertonic', 'local', 'hint']) $(id).hidden = !supertonic;
 }
 
-// ── Supertonic: device and speed test ────────────────────
+// ── Supertonic: device, server and speed test ────────────
 
 const DEVICE_HINTS = {
-  auto: 'Uses whichever your last speed test found faster; before one, the graphics card when there is a suitable one.',
+  auto: 'Uses whichever your last speed test found fastest (your server too, if set up); before one, the graphics card when there is a suitable one.',
   gpu: 'Always uses the graphics card (WebGPU). Fastest when the computer has a real one.',
   cpu: 'Uses the processor only. Works everywhere; slower, and busier on laptops.',
+  server: 'Uses your own Supertonic server, set up below. If it can\'t be reached, Supertonic runs on this computer instead.',
 };
+const DEVICE_NAMES = { gpu: 'GPU', cpu: 'CPU', server: 'Server' };
 
 function showDeviceHint(device) {
   $('device-hint').textContent = DEVICE_HINTS[device];
+}
+
+// The server's address as typed, without a trailing slash or path after the API's
+// root ("https://host/v1/" and "https://host/" both mean https://host); '' if not a URL.
+function serverAddress(text) {
+  try {
+    const url = new URL(text.trim());
+    if (!/^https?:$/.test(url.protocol)) return '';
+    return (url.origin + url.pathname.replace(/\/(v1\/?)?$/, '')).replace(/\/$/, '');
+  } catch {
+    return '';
+  }
 }
 
 // The last speed test: { state: 'running', device } or { state: 'done', results, at },
@@ -64,33 +79,39 @@ function showBenchmark(bench) {
   button.textContent = bench?.state === 'running' ? 'Testing…' : bench ? 'Test again' : 'Test speed';
   if (!bench) return;
   if (bench.state === 'running') {
-    box.append(resultRow(bench.device === 'gpu' ? 'GPU' : 'CPU', 'Testing…', ''));
+    box.append(resultRow(DEVICE_NAMES[bench.device], 'Testing…', ''));
     return;
   }
   for (const r of bench.results) {
-    const name = r.device === 'gpu' ? 'GPU' : 'CPU';
+    const name = DEVICE_NAMES[r.device];
     if (!r.available) {
       box.append(resultRow(name, 'Not available', r.error ?? ''));
       continue;
     }
-    const detail = `ready in ${(r.loadMs / 1000).toFixed(1)} s, first sentence ${(r.firstMs / 1000).toFixed(1)} s`
+    const ready = r.device === 'server' ? 'connected in' : 'ready in';
+    const detail = `${ready} ${(r.loadMs / 1000).toFixed(1)} s, first sentence ${(r.firstMs / 1000).toFixed(1)} s`
       + (r.steps ? `, ${r.steps} steps` : '');
     box.append(resultRow(name, `${r.speed}× real time`, detail, r.speed >= 1.3 ? 'ok' : 'slow'));
   }
-  const [gpu, cpu] = ['gpu', 'cpu'].map((d) => bench.results.find((r) => r.device === d && r.available));
+  // The same rule Auto uses in background.js: the fastest, if it wins by 10%.
+  const [first, second] = bench.results.filter((r) => r.available).sort((a, b) => b.speed - a.speed);
+  const winner = first && (!second || first.speed >= second.speed * 1.1) ? first : null;
   const advice = document.createElement('p');
   advice.className = 'hint';
-  // The same 10% margin Auto uses in background.js.
   advice.textContent =
-    gpu && (!cpu || gpu.speed >= cpu.speed * 1.1)
-      ? 'The GPU is faster here, and Auto uses it.'
-      : cpu && (!gpu || cpu.speed >= gpu.speed * 1.1)
-        ? cpu.speed >= 1.3
-          ? 'The CPU is faster here and keeps up, so Auto uses it.'
-          : 'The CPU is faster here, but neither keeps up comfortably: expect short pauses between sentences, or pick a system voice.'
-        : gpu || cpu
-          ? 'They are about as fast here; either is fine.'
-          : 'Neither device could be tested; Supertonic will use the CPU.';
+    winner?.device === 'gpu'
+      ? 'The GPU is fastest here, and Auto uses it.'
+      : winner?.device === 'server'
+        ? 'Your server is fastest here, and Auto uses it (this computer when it can\'t be reached).'
+        : winner?.device === 'cpu'
+          ? winner.speed >= 1.3
+            ? 'The CPU is fastest here and keeps up, so Auto uses it.'
+            : 'The CPU is fastest here, but nothing keeps up comfortably: expect short pauses between sentences, or pick a system voice.'
+          : first && [first, second].some((r) => r.device === 'server')
+            ? 'Your server is about as fast as this computer, so Auto reads here.'
+            : first
+              ? 'They are about as fast here; either is fine.'
+              : 'Nothing could be tested; Supertonic will use the CPU.';
   box.append(advice);
 }
 
@@ -135,10 +156,10 @@ function segmented(container, options, current, onPick) {
 }
 
 async function init() {
-  const [prefs, voices, { supertonicBenchmark }] = await Promise.all([
+  const [prefs, voices, { supertonicBenchmark, serverUrl = '', serverKey = '' }] = await Promise.all([
     chrome.storage.sync.get(['voiceName', 'rate', 'device', 'highlight', 'supertonicSteps']),
     chrome.tts.getVoices(),
-    chrome.storage.local.get('supertonicBenchmark'),
+    chrome.storage.local.get(['supertonicBenchmark', 'serverUrl', 'serverKey']),
   ]);
   const { voiceName = DEFAULT_VOICE, rate = 1, device = 'auto', highlight = true, supertonicSteps = 4 } = prefs;
 
@@ -153,7 +174,7 @@ async function init() {
   const shown = voices
     .filter((v) => (isNatural(v) && inMyLanguage(v)) || v.voiceName === voiceName)
     .sort(byName);
-  addGroup('Supertonic (runs on this computer)', SUPERTONIC_VOICES, voiceName);
+  addGroup('Supertonic', SUPERTONIC_VOICES, voiceName);
   addGroup('System voices', shown.filter((v) => !v.remote).map(toItem), voiceName);
   addGroup('Online', shown.filter((v) => v.remote).map(toItem), voiceName);
   showVoiceSettings();
@@ -177,9 +198,27 @@ async function init() {
   $('device').addEventListener('change', async (e) => {
     await chrome.storage.sync.set({ device: e.target.value });
     showDeviceHint(e.target.value);
+    if (e.target.value === 'server') $('server').open = true;
     saved();
   });
   showBenchmark(supertonicBenchmark);
+
+  // The server's address and key; open while the server is picked but not set up.
+  $('server-url').value = serverUrl;
+  $('server-key').value = serverKey;
+  $('server').open = device === 'server' && !(serverUrl && serverKey);
+  $('server-url').addEventListener('change', async (e) => {
+    const url = serverAddress(e.target.value);
+    e.target.setCustomValidity(url || !e.target.value.trim() ? '' : 'Enter a web address, like https://tts.example.com');
+    if (!e.target.reportValidity()) return;
+    e.target.value = url;
+    await chrome.storage.local.set({ serverUrl: url });
+    saved();
+  });
+  $('server-key').addEventListener('change', async (e) => {
+    await chrome.storage.local.set({ serverKey: e.target.value.trim() });
+    saved();
+  });
 
   $('highlight').checked = highlight;
   $('highlight').addEventListener('change', async (e) => {

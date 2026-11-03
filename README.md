@@ -5,7 +5,7 @@ A Chrome and Edge extension that reads the text you select aloud, sentence by se
 - Select text and click the floating **▶ Read** button; it turns into a player (pause, speed, stop). Supertonic speaks Slow and Fast at that pace itself rather than stretching the audio.
 - Each word is highlighted as it's read.
 - Voices: Supertonic 3 (local and offline, English for now, ten voices, default **F1**, quality from 4 to 16 denoising steps), the system's Premium/Enhanced voices, and Edge's Microsoft Natural voices in Edge.
-- Supertonic runs on the GPU (WebGPU) or the CPU; the popup's speed test measures both, and Auto then uses whichever was faster.
+- Supertonic runs on the GPU (WebGPU) or the CPU, or on [your own Supertonic server](#your-own-supertonic-server); the popup's speed test measures each, and Auto then uses whichever was clearly fastest.
 - Works inside iframes (e.g. e-learning lessons). Shortcuts: Alt+R read, Alt+P pause/resume, Alt+S stop.
 
 ## Set up
@@ -26,6 +26,12 @@ Then load the extension:
 
 After changing files, click the extension's **Reload** button rather than removing and re-adding it: removing deletes its stored data (settings, speed test). Tabs that were already open keep the previous copy of the content script, so refresh them (or press Alt+R once) to pick up the new one.
 
+## Your own Supertonic server
+
+Under **Supertonic runs on**, **Server** sends the text to a Supertonic server of your own (for example on a machine with a big GPU) and plays the speech it returns. It's the same model and voices, so it sounds the same. It helps most on computers without a fast graphics card, where 16 steps can't keep up locally. Set its address and API key in the popup; the key is kept in that browser only (`chrome.storage.local`), and the text you read is sent to the server.
+
+The server needs an OpenAI-compatible `POST /v1/audio/speech` that takes a bearer key and Supertonic's options (`voice` F1–M5, `steps`, `speed`, `lang`, `response_format: "flac"`), and it must allow cross-origin requests (CORS). If it can't be reached or rejects the key, the rest of that reading is made on your computer instead.
+
 ## Layout
 
 | Path | What it is |
@@ -33,11 +39,12 @@ After changing files, click the extension's **Reload** button rather than removi
 | `selection-reader/manifest.json` | Extension manifest |
 | `selection-reader/background.js` | Service worker: reading sessions, system voices (`chrome.tts`), messages |
 | `selection-reader/page.js` | Floating Read button and player, word highlighting (runs in every frame) |
-| `selection-reader/popup.html`, `popup.js` | Settings: voice, speed, Supertonic quality, GPU/CPU and speed test, highlighting |
+| `selection-reader/popup.html`, `popup.js` | Settings: voice, speed, Supertonic quality, GPU/CPU/server and speed test, highlighting |
 | `selection-reader/offscreen.html` | Hidden page that runs Supertonic and plays its audio |
 | `src/offscreen.js` | Source of the Supertonic player (built into `selection-reader/offscreen.js`) |
 | `src/supertonic.js` | Supertonic 3 engine: four ONNX models, 4/6/8/16 denoising steps, 44.1 kHz |
 | `src/supertonic-helper.js` | Supertonic's browser helper (MIT) |
+| `src/server.js` | Supertonic on your own server (OpenAI-compatible API) |
 | `build.mjs` | Build script |
 
 ## Third-party software

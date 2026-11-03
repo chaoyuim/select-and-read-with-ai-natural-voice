@@ -6,12 +6,14 @@
 //   the page itself has had a recent click or key press, which a context-menu click
 //   or an extension shortcut doesn't count as.
 // - Supertonic, a voice model that runs locally in the offscreen document
-//   (offscreen.html), since a service worker can't run it or play audio.
+//   (offscreen.html), since a service worker can't run it or play audio; or on the
+//   user's own Supertonic server, whose speech that document plays.
 
 // ── Settings ─────────────────────────────────────────────
 // Saved by the popup in chrome.storage.sync: voiceName, rate, device ('auto' |
-// 'gpu' | 'cpu', for Supertonic), supertonicSteps and highlight (highlight each word
-// while reading).
+// 'gpu' | 'cpu' | 'server', for Supertonic), supertonicSteps and highlight (highlight
+// each word while reading). The server's address and API key (serverUrl, serverKey)
+// are in chrome.storage.local, so the key stays in this browser.
 const DEFAULT_VOICE = 'supertonic:F1'; // bundled (see build.mjs), so a fresh install reads offline straight away
 // Speed presets, named like Edge's Read Aloud; the widget's speed button cycles them.
 const SPEEDS = [
@@ -36,21 +38,26 @@ const settings = async () => ({
 // Denoising steps for Supertonic: the saved choice, or the fastest.
 const stepsOf = (prefs) => (SUPERTONIC_STEPS.has(Number(prefs.supertonicSteps)) ? Number(prefs.supertonicSteps) : 4);
 
+// The user's Supertonic server, { url, key }, or null when it isn't set up.
+async function serverConfig() {
+  const { serverUrl, serverKey } = await chrome.storage.local.get(['serverUrl', 'serverKey']);
+  return serverUrl && serverKey ? { url: serverUrl, key: serverKey } : null;
+}
+
 // The device to run Supertonic on. 'auto' uses the winner of the last speed test
-// (chrome.storage.local.supertonicBenchmark, with a 10% margin, since a weak GPU can
-// be slower than the CPU); before any test it defers to the player, which prefers a
-// real GPU (see backendFor in offscreen.js).
-async function deviceFor(pref) {
+// (chrome.storage.local.supertonicBenchmark), if it won by 10% (a weak GPU can be
+// slower than the CPU, and the server isn't worth sending text to for a small gain);
+// otherwise it defers to the player, which prefers a real GPU (see backendFor in
+// offscreen.js). Without a server set up, 'server' means 'auto'.
+async function deviceFor(pref, server) {
+  if (pref === 'server') return server ? 'server' : 'auto';
   if (pref !== 'auto') return pref;
   const { supertonicBenchmark: benchmark } = await chrome.storage.local.get('supertonicBenchmark');
-  const results = benchmark?.state === 'done' ? benchmark.results : [];
-  const speed = (device) => results.find((r) => r.device === device && r.available)?.speed;
-  const gpu = speed('gpu');
-  const cpu = speed('cpu');
-  if (gpu == null || cpu == null) return pref;
-  if (gpu >= cpu * 1.1) return 'gpu';
-  if (cpu >= gpu * 1.1) return 'cpu';
-  return pref;
+  const results = (benchmark?.state === 'done' ? benchmark.results : [])
+    .filter((r) => r.available && (r.device !== 'server' || server))
+    .sort((a, b) => b.speed - a.speed);
+  const [first, second] = results;
+  return first && (!second || first.speed >= second.speed * 1.1) ? first.device : pref;
 }
 
 // The preset closest to a rate (older versions saved rates like 0.85).
@@ -238,7 +245,7 @@ async function ensureOffscreen() {
       // WORKERS as well, so Chrome doesn't close it after 30 s without audio and
       // throw away the loaded model.
       reasons: ['AUDIO_PLAYBACK', 'WORKERS'],
-      justification: 'Runs the local Supertonic voice model and plays the speech it generates.',
+      justification: 'Runs the local Supertonic voice model, or fetches its speech from the user\'s server, and plays it.',
     })
     .finally(() => (creatingOffscreen = null));
   await creatingOffscreen;
@@ -255,7 +262,7 @@ const supertonicEngine = {
     if (session !== s) return; // stopped while the document was being created
     toOffscreen({
       type: 'speak', id: s.id, chunks: s.chunks, voice: s.voice.supertonic,
-      rate: s.rate, device: s.device, steps: s.steps, start,
+      rate: s.rate, device: s.device, steps: s.steps, server: s.server, start,
     });
   },
   pause: () => toOffscreen({ type: 'pause' }),
@@ -264,31 +271,37 @@ const supertonicEngine = {
   setRate: (s) => toOffscreen({ type: 'rate', rate: s.rate }), // applies mid-sentence
 };
 
-// Start loading the local model as soon as text is selected, so reading starts sooner.
+// Start loading the local model (or connecting to the server) as soon as text is
+// selected, so reading starts sooner.
 async function prepare() {
   const { voiceName, device } = await settings();
   if (!voiceName.startsWith(SUPERTONIC)) return;
+  const server = await serverConfig();
+  const where = await deviceFor(device, server);
   await ensureOffscreen();
-  toOffscreen({ type: 'load', device: await deviceFor(device) });
+  toOffscreen({ type: 'load', device: where, server: where === 'server' ? server : null });
 }
 
-// Time Supertonic on the GPU and the CPU at the saved number of steps (popup's Test
-// speed button). Progress and results go to chrome.storage.local.supertonicBenchmark,
-// where the popup reads them.
+// Time Supertonic on the GPU, the CPU and the server (if set up) at the saved number
+// of steps (popup's Test speed button). Progress and results go to
+// chrome.storage.local.supertonicBenchmark, where the popup reads them.
 async function benchmark() {
   const steps = stepsOf(await settings());
+  const server = await serverConfig();
+  const runs = [{ device: 'gpu' }, { device: 'cpu' }, ...(server ? [{ device: 'server' }] : [])];
   await chrome.storage.local.set({ supertonicBenchmark: { state: 'running', device: 'gpu', startedAt: Date.now() } });
   await ensureOffscreen();
-  toOffscreen({ type: 'benchmark', steps });
+  toOffscreen({ type: 'benchmark', runs, steps, server });
 }
 
 // ── Reading ──────────────────────────────────────────────
 // The reading in progress, or null:
-// { id, tabId, frameId, engine, chunks, voice, rate, device, index, total, paused,
-//   status, wordOffsets, highlight }
+// { id, tabId, frameId, engine, chunks, voice, rate, device, steps, server, index,
+//   total, paused, status, wordOffsets, highlight }
 // tabId is null for the popup's sample; frameId is the frame whose widget shows the
 // player (0 = the page itself, others are iframes). index/total/paused/rate/status
 // are what the widget shows; status is set while Supertonic loads ("Loading voice…").
+// server is the user's Supertonic server when the device is 'server', else null.
 // wordOffsets[i] is how many words come before chunk i; highlight is whether to
 // send the widget each word as it's read.
 let session = null;
@@ -342,7 +355,9 @@ async function read(tabId, { text, frameId = 0, fromPage = true }) {
   const prefs = await settings();
   const voice = await pickVoice(prefs.voiceName);
   const engine = voice?.supertonic ? supertonicEngine : ttsEngine;
-  const device = engine === supertonicEngine ? await deviceFor(prefs.device) : prefs.device;
+  const serverSetUp = engine === supertonicEngine ? await serverConfig() : null;
+  const device = engine === supertonicEngine ? await deviceFor(prefs.device, serverSetUp) : prefs.device;
+  const server = device === 'server' ? serverSetUp : null;
   const chunks = engine === supertonicEngine ? toSupertonicChunks(text) : toChunks(text);
   const steps = stepsOf(prefs);
   let words = 0;
@@ -352,7 +367,7 @@ async function read(tabId, { text, frameId = 0, fromPage = true }) {
     return before;
   });
   const s = (session = {
-    id: nextId++, tabId, frameId, engine, chunks, voice, rate: prefs.rate, device, steps,
+    id: nextId++, tabId, frameId, engine, chunks, voice, rate: prefs.rate, device, steps, server,
     index: 1, total: chunks.length, paused: false,
     status: engine === ttsEngine ? null : 'Loading voice…',
     wordOffsets, highlight: prefs.highlight && fromPage && tabId != null,

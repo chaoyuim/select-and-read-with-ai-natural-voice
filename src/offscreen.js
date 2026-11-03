@@ -2,17 +2,19 @@
 //
 // The background script can't play audio or run the model, so it sends this page
 // the sentences to read. Each one is turned into audio with the local Supertonic
-// model (supertonic.js) while the previous one plays. Built into
-// selection-reader/offscreen.js by `npm run build`.
+// model (supertonic.js), or by the user's own Supertonic server (server.js), while the
+// previous one plays. Built into selection-reader/offscreen.js by `npm run build`.
 import { loadSupertonic, speakSupertonic, cpuThreads } from './supertonic.js';
+import { speakServer, warmServer } from './server.js';
 
 const post = (msg) => chrome.runtime.sendMessage({ type: 'voice-event', ...msg }).catch(() => {});
 
 // ── Model ────────────────────────────────────────────────
 // device: 'gpu' (WebGPU), 'cpu' (WebAssembly, multi-threaded since the page is
-// cross-origin isolated, see manifest.json) or 'auto'. Auto skips "fallback"
-// adapters (software rendering, e.g. a PC without a graphics driver), which are
-// slower than the CPU path; 'gpu' uses any adapter. Without one, both use the CPU.
+// cross-origin isolated, see manifest.json), 'auto', or 'server' (see synthesize).
+// Auto skips "fallback" adapters (software rendering, e.g. a PC without a graphics
+// driver), which are slower than the CPU path; 'gpu' uses any adapter. Without one,
+// both use the CPU.
 const gpuAdapter = async () => (await navigator.gpu?.requestAdapter().catch(() => null)) ?? null;
 
 // The ONNX runtime backend a device setting means: 'webgpu' or 'wasm'.
@@ -36,15 +38,31 @@ function generate(job, i) {
   return enqueue(async () => {
     if (job.cancelled) return null;
     const speed = job.rate;
-    const { blob, samples, sampleRate } = await speakSupertonic(
-      job.chunks[i], job.voice, job.steps, await backendFor(job.device), speed,
-    );
+    const made = await synthesize(job, job.chunks[i], speed);
+    if (!made) return null;
+    const { blob, samples, sampleRate } = made;
     return {
       blob,
       wordStarts: estimateWordStarts(job.chunks[i], { audio: samples, sampling_rate: sampleRate }),
       speed,
     };
   });
+}
+
+// One sentence from the user's server (job.server, when the device is 'server'), or
+// from the local model. If the server fails (offline, wrong key…), the rest of the
+// reading is made here, so a dead server doesn't hold up every sentence.
+async function synthesize(job, text, speed) {
+  if (job.server && !job.serverFailed) {
+    try {
+      return await speakServer(job.server, text, job.voice, job.steps, speed, job.abort.signal);
+    } catch (err) {
+      if (job.cancelled) return null;
+      console.warn('[Selection Reader] Supertonic server failed, reading on this computer:', err.message);
+      job.serverFailed = true;
+    }
+  }
+  return speakSupertonic(text, job.voice, job.steps, await backendFor(job.server ? 'auto' : job.device), speed);
 }
 
 // The model doesn't say when each word is spoken, so estimate it: spread the words
@@ -71,7 +89,8 @@ function estimateWordStarts(text, { audio: samples, sampling_rate: rate }) {
 }
 
 // ── Playback ─────────────────────────────────────────────
-// job: { id, chunks, voice, rate, device, steps, paused, cancelled, sentenceSpeed }
+// job: { id, chunks, voice, rate, device, steps, server, paused, cancelled, abort,
+//   serverFailed, sentenceSpeed }; abort cancels a server request in flight.
 let current = null;
 let audio = null;
 
@@ -137,6 +156,7 @@ function startAudio(onFail) {
 function stop() {
   if (current) {
     current.cancelled = true;
+    current.abort.abort();
     current.finishSentence?.();
   }
   audio?.pause();
@@ -146,12 +166,12 @@ function stop() {
 
 // ── Benchmark ────────────────────────────────────────────
 // Times loading the model and reading a sentence on each device, at the given
-// number of steps. `speed` is how many seconds of speech are made per second
-// (above 1 keeps up with playback).
+// number of steps; for the server, the whole round trip. `speed` is how many seconds
+// of speech are made per second (above 1 keeps up with playback).
 const BENCHMARK_TEXT =
   'The quick brown fox jumps over the lazy dog, then it runs back into the forest to rest for the night.';
 
-function benchmark(runs, steps) {
+function benchmark(runs, steps, server) {
   return enqueue(async () => {
     const results = [];
     for (const { device } of runs) {
@@ -161,10 +181,12 @@ function benchmark(runs, steps) {
           results.push({ device, available: false, error: 'No WebGPU-capable GPU' });
           continue;
         }
-        const backend = await backendFor(device);
-        const say = () => speakSupertonic(BENCHMARK_TEXT, 'F1', steps, backend);
+        const backend = device === 'server' ? null : await backendFor(device);
+        const say = backend
+          ? () => speakSupertonic(BENCHMARK_TEXT, 'F1', steps, backend)
+          : () => speakServer(server, BENCHMARK_TEXT, 'F1', steps);
         let t = performance.now();
-        await loadSupertonic(backend);
+        await (backend ? loadSupertonic(backend) : warmServer(server));
         const loadMs = performance.now() - t;
         t = performance.now();
         await say(); // first run includes warm-up
@@ -191,13 +213,14 @@ chrome.runtime.onMessage.addListener((msg) => {
   if (msg.target !== 'offscreen') return;
   switch (msg.type) {
     case 'load':
-      enqueue(async () => loadSupertonic(await backendFor(msg.device))).catch(() => {});
+      if (msg.server) warmServer(msg.server);
+      else enqueue(async () => loadSupertonic(await backendFor(msg.device))).catch(() => {});
       break;
     case 'speak':
       stop();
       current = {
         id: msg.id, chunks: msg.chunks, voice: msg.voice, rate: msg.rate, device: msg.device,
-        steps: msg.steps, paused: false,
+        steps: msg.steps, server: msg.server, paused: false, abort: new AbortController(),
       };
       play(current, msg.start ?? 0);
       break;
@@ -217,7 +240,7 @@ chrome.runtime.onMessage.addListener((msg) => {
       stop();
       break;
     case 'benchmark':
-      benchmark(msg.runs ?? [{ device: 'gpu' }, { device: 'cpu' }], msg.steps);
+      benchmark(msg.runs ?? [{ device: 'gpu' }, { device: 'cpu' }], msg.steps, msg.server);
       break;
   }
 });
