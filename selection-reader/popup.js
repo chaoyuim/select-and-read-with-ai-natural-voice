@@ -23,7 +23,16 @@ const KOKORO_VOICES = [
   ['bf_isabella', 'Isabella', 'UK'], ['bm_george', 'George', 'UK'], ['bm_fable', 'Fable', 'UK'],
 ].map(([id, name, accent]) => ({ id, value: `kokoro:${id}`, text: `${name} (${accent})` }));
 
+// Supertonic 3's ten preset voices (F1-F5 female, M1-M5 male); all are bundled.
+const SUPERTONIC_VOICES = ['F1', 'F2', 'F3', 'F4', 'F5', 'M1', 'M2', 'M3', 'M4', 'M5'].map((id) => ({
+  id,
+  value: `supertonic:${id}`,
+  text: `${id} (${id.startsWith('F') ? 'female' : 'male'})`,
+}));
+
 const isKokoro = () => select.value.startsWith('kokoro:');
+const isSupertonic = () => select.value.startsWith('supertonic:');
+const SUPERTONIC_STEPS = [4, 6, 8];
 
 // ── Voice ────────────────────────────────────────────────
 
@@ -54,9 +63,11 @@ async function showKokoroDownloads() {
     const option = select.querySelector(`option[value="${v.value}"]`);
     if (option) option.text = hasModel && voices.has(v.id) ? `${v.text}  ✓ downloaded` : v.text;
   }
-  hint.textContent = hasModel
-    ? 'Runs on your computer. Voices marked ✓ work offline; the others download a small file (under 1 MB) the first time.'
-    : 'Runs on your computer. The first time, it downloads the voice model (about 330 MB) and takes a few seconds to start; after that it works offline.';
+  if (isKokoro()) {
+    hint.textContent = hasModel
+      ? 'Runs on your computer. Voices marked ✓ work offline; the others download a small file (under 1 MB) the first time.'
+      : 'Runs on your computer. The first time, it downloads the voice model (about 330 MB) and takes a few seconds to start; after that it works offline.';
+  }
 }
 
 // items: [{ value, text }]
@@ -68,15 +79,22 @@ function addGroup(label, items, current) {
   select.append(group);
 }
 
-function showKokoroSettings() {
-  hint.hidden = !isKokoro();
-  $('kokoro').hidden = !isKokoro();
+function showVoiceSettings() {
+  const kokoro = isKokoro();
+  const supertonic = isSupertonic();
+  $('kokoro').hidden = !kokoro;
+  $('supertonic').hidden = !supertonic;
+  hint.hidden = !(kokoro || supertonic);
+  if (kokoro) showKokoroDownloads();
+  else if (supertonic) {
+    hint.textContent = 'Supertonic 3 (English) runs on your computer at 44.1 kHz.';
+  }
 }
 
 // ── Kokoro device and speed test ─────────────────────────
 
 const DEVICE_HINTS = {
-  auto: 'Uses the graphics card when there is a suitable one, otherwise the processor.',
+  auto: 'Uses whichever your last speed test found faster; before one, the graphics card when there is a suitable one.',
   gpu: 'Always uses the graphics card (WebGPU). Fastest when the computer has a real one.',
   cpu: 'Uses the processor only. Works everywhere; slower, and busier on laptops.',
 };
@@ -112,12 +130,17 @@ function showBenchmark(bench) {
   const [gpu, cpu] = ['gpu', 'cpu'].map((d) => bench.results.find((r) => r.device === d && r.available));
   const advice = document.createElement('p');
   advice.className = 'hint';
+  // The same 10% margin Auto uses in background.js.
   advice.textContent =
-    gpu && (!cpu || gpu.speed >= cpu.speed)
-      ? 'The GPU is faster here, so Auto or GPU is the best choice.'
-      : cpu && cpu.speed >= 1.3
-        ? 'The CPU keeps up here, so CPU or Auto is a good choice.'
-        : 'Neither keeps up comfortably here: expect short pauses between sentences, or pick a system voice.';
+    gpu && (!cpu || gpu.speed >= cpu.speed * 1.1)
+      ? 'The GPU is faster here, and Auto uses it.'
+      : cpu && (!gpu || cpu.speed >= gpu.speed * 1.1)
+        ? cpu.speed >= 1.3
+          ? 'The CPU is faster here and keeps up, so Auto uses it.'
+          : 'The CPU is faster here, but neither keeps up comfortably: expect short pauses between sentences, or pick a system voice.'
+        : gpu || cpu
+          ? 'They are about as fast here; either is fine.'
+          : 'Neither device could be tested; Kokoro will use the CPU.';
   box.append(advice);
 }
 
@@ -163,11 +186,11 @@ function segmented(container, options, current, onPick) {
 
 async function init() {
   const [prefs, voices, { benchmark }] = await Promise.all([
-    chrome.storage.sync.get(['voiceName', 'rate', 'device', 'highlight']),
+    chrome.storage.sync.get(['voiceName', 'rate', 'device', 'highlight', 'supertonicSteps']),
     chrome.tts.getVoices(),
     chrome.storage.local.get('benchmark'),
   ]);
-  const { voiceName = DEFAULT_VOICE, rate = 1, device = 'auto', highlight = true } = prefs;
+  const { voiceName = DEFAULT_VOICE, rate = 1, device = 'auto', highlight = true, supertonicSteps = 4 } = prefs;
 
   // Only the natural-sounding voices: the system's downloaded Premium/Enhanced voices
   // (macOS) and "Natural" ones (Edge has hundreds), in English or the browser's own
@@ -181,15 +204,22 @@ async function init() {
     .filter((v) => (isNatural(v) && inMyLanguage(v)) || v.voiceName === voiceName)
     .sort(byName);
   addGroup('Kokoro (runs on this computer)', KOKORO_VOICES, voiceName);
+  addGroup('Supertonic (local, fast)', SUPERTONIC_VOICES, voiceName);
   addGroup('System voices', shown.filter((v) => !v.remote).map(toItem), voiceName);
   addGroup('Online', shown.filter((v) => v.remote).map(toItem), voiceName);
-  showKokoroSettings();
-  showKokoroDownloads();
+  showVoiceSettings();
 
   // Speed: the preset closest to the saved rate (older versions saved e.g. 0.85).
   const closest = SPEEDS.reduce((a, b) => (Math.abs(b.rate - rate) < Math.abs(a.rate - rate) ? b : a));
   segmented($('speed'), SPEEDS.map((s) => ({ value: s.rate, label: s.label })), closest.rate, async (v) => {
     await chrome.storage.sync.set({ rate: Number(v) });
+    saved();
+  });
+
+  // Supertonic: 4 steps is fast, 8 is the best quality; applies to the next reading.
+  const steps = SUPERTONIC_STEPS.includes(Number(supertonicSteps)) ? Number(supertonicSteps) : 4;
+  segmented($('steps'), SUPERTONIC_STEPS.map((n) => ({ value: n, label: `${n} steps` })), steps, async (v) => {
+    await chrome.storage.sync.set({ supertonicSteps: Number(v) });
     saved();
   });
 
@@ -211,12 +241,12 @@ async function init() {
 
 // A Kokoro sentence starting means its model and voice are now downloaded.
 chrome.runtime.onMessage.addListener((msg) => {
-  if (msg.type === 'kokoro-event' && msg.event === 'start') showKokoroDownloads();
+  if (msg.type === 'kokoro-event' && msg.event === 'start' && isKokoro()) showKokoroDownloads();
 });
 
 select.addEventListener('change', async () => {
   await chrome.storage.sync.set({ voiceName: select.value });
-  showKokoroSettings();
+  showVoiceSettings();
   saved();
 });
 

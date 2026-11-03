@@ -6,13 +6,16 @@
 // `npm run build`.
 import { KokoroTTS } from 'kokoro-js';
 import { env } from '@huggingface/transformers';
+import { loadSupertonic, speakSupertonic } from './supertonic.js';
 
 const MODEL = 'onnx-community/Kokoro-82M-v1.0-ONNX';
 
 // The ONNX runtime's wasm ships inside the extension (extensions can't load code from a CDN).
 env.backends.onnx.wasm.wasmPaths = chrome.runtime.getURL('vendor/ort/');
-// CPU threads: the runtime's default (up to 4) is ~2.3x real time on an M5; 8 threads
-// only reach ~2.6x, so leave the default and the rest of the machine some room.
+// CPU threads: the runtime's default (up to 4) leaves speed on the table. 8 threads
+// measured ~18% faster than 4 on an i7-6700 (0.87x against 0.74x real time), and on
+// an M5 they still helped (2.6x against 2.3x), so use the cores each machine has.
+env.backends.onnx.wasm.numThreads = Math.min(8, navigator.hardwareConcurrency || 4);
 
 // The model and some voices may be bundled in the extension's models/ folder by
 // `npm run build` ({ model, voices } in bundled.json); otherwise they're downloaded.
@@ -20,6 +23,7 @@ const bundled = fetch(chrome.runtime.getURL('models/bundled.json'))
   .then((r) => r.json())
   .catch(() => null);
 
+// Both local engines report through this message (background.js keeps the name).
 const post = (msg) => chrome.runtime.sendMessage({ type: 'kokoro-event', ...msg }).catch(() => {});
 
 // ── Model ────────────────────────────────────────────────
@@ -98,7 +102,7 @@ function enqueue(task) {
   return result;
 }
 
-function generate(job, i) {
+function generateKokoro(job, i) {
   return enqueue(async () => {
     if (job.cancelled) return null;
     const tts = await loadModel(job.device, job.id);
@@ -106,6 +110,21 @@ function generate(job, i) {
     const audio = await tts.generate(job.chunks[i], { voice: job.voice });
     return { blob: audio.toBlob(), wordStarts: estimateWordStarts(job.chunks[i], audio) };
   });
+}
+
+function generateSupertonic(job, i) {
+  return enqueue(async () => {
+    if (job.cancelled) return null;
+    const { blob, samples, sampleRate } = await speakSupertonic(job.chunks[i], job.voice, job.steps);
+    return {
+      blob,
+      wordStarts: estimateWordStarts(job.chunks[i], { audio: samples, sampling_rate: sampleRate }),
+    };
+  });
+}
+
+function generate(job, i) {
+  return job.engine === 'supertonic' ? generateSupertonic(job, i) : generateKokoro(job, i);
 }
 
 // Kokoro doesn't say when each word is spoken, so estimate it: spread the words
@@ -206,7 +225,7 @@ function stop() {
 // Times loading the model and reading a sentence on each device. `speed` is how
 // many seconds of speech are made per second (above 1 keeps up with playback).
 // A run can name a dtype to compare model variants (fp32 measured faster than q8
-// on the CPU too: 2.3x against 1.2x real time on an M5).
+// on the CPU here too: 0.87x against 0.45x real time on an i7-6700).
 const BENCHMARK_TEXT =
   'The quick brown fox jumps over the lazy dog, then it runs back into the forest to rest for the night.';
 
@@ -253,9 +272,23 @@ chrome.runtime.onMessage.addListener((msg) => {
     case 'load':
       enqueue(() => loadModel(msg.device, msg.id)).catch(() => {});
       break;
+    case 'load-supertonic':
+      enqueue(() => loadSupertonic()).catch(() => {});
+      break;
     case 'speak':
       stop();
-      current = { id: msg.id, chunks: msg.chunks, voice: msg.voice, rate: msg.rate, device: msg.device, paused: false };
+      current = {
+        id: msg.id, chunks: msg.chunks, voice: msg.voice, rate: msg.rate, device: msg.device,
+        paused: false, engine: 'kokoro',
+      };
+      play(current, msg.start ?? 0);
+      break;
+    case 'supertonic-speak':
+      stop();
+      current = {
+        id: msg.id, chunks: msg.chunks, voice: msg.voice, rate: msg.rate, device: msg.device,
+        steps: msg.steps, paused: false, engine: 'supertonic',
+      };
       play(current, msg.start ?? 0);
       break;
     case 'pause':
