@@ -3,9 +3,10 @@
 //   ONNX runtime wasm -> selection-reader/vendor/ort/ (extensions can't load code from a CDN)
 //   Supertonic 3 models + voices -> selection-reader/models/supertonic/ (downloaded once,
 //     ~400 MB), so the voice works offline and survives removing the extension
+//   server.local.json -> selection-reader/server-default.json (the default server's key)
 // Run with: npm run build
 import * as esbuild from 'esbuild';
-import { cpSync, existsSync, mkdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
@@ -31,6 +32,13 @@ for (const file of ['ort-wasm-simd-threaded.jsep.mjs', 'ort-wasm-simd-threaded.j
   cpSync(`node_modules/onnxruntime-web/dist/${file}`, `${ortDir}/${file}`);
 }
 console.log(`Built ${outfile}`);
+
+// The API key for the default Supertonic server (see background.js), from
+// server.local.json ({ "key": "…" }) if it exists. Git ignores both files, so the key
+// stays out of the public repository; without it, the key is entered in the popup.
+const { key = '' } = existsSync('server.local.json') ? JSON.parse(readFileSync('server.local.json', 'utf8')) : {};
+writeFileSync('selection-reader/server-default.json', JSON.stringify({ key }) + '\n');
+console.log(key ? 'Default server key: from server.local.json' : 'No default server key (no server.local.json)');
 
 // Downloads a file once; a .part name only becomes the real name when complete.
 async function downloadTo(url, dest) {

@@ -4,6 +4,7 @@
 // chrome.storage.local); background.js reads it when reading starts.
 
 const DEFAULT_VOICE = 'supertonic:F1'; // keep in step with background.js
+const DEFAULT_SERVER_URL = 'https://supertonic3.chaoyu.nl'; // likewise
 // Keep in step with SPEEDS in background.js.
 const SPEEDS = [
   { label: 'Slow', rate: 0.9 },
@@ -21,7 +22,7 @@ const SUPERTONIC_VOICES = ['F1', 'F2', 'F3', 'F4', 'F5', 'M1', 'M2', 'M3', 'M4',
 }));
 
 const isSupertonic = () => select.value.startsWith('supertonic:');
-const SUPERTONIC_STEPS = [4, 6, 8, 16];
+const SUPERTONIC_STEPS = [8, 16];
 
 // ── Voice ────────────────────────────────────────────────
 
@@ -156,12 +157,14 @@ function segmented(container, options, current, onPick) {
 }
 
 async function init() {
-  const [prefs, voices, { supertonicBenchmark, serverUrl = '', serverKey = '' }] = await Promise.all([
+  const [prefs, voices, { supertonicBenchmark, serverUrl, serverKey }, defaultKey] = await Promise.all([
     chrome.storage.sync.get(['voiceName', 'rate', 'device', 'highlight', 'supertonicSteps']),
     chrome.tts.getVoices(),
     chrome.storage.local.get(['supertonicBenchmark', 'serverUrl', 'serverKey']),
+    // The build's default key, if any (see background.js).
+    fetch('server-default.json').then((r) => r.json()).then((d) => d.key || '', () => ''),
   ]);
-  const { voiceName = DEFAULT_VOICE, rate = 1, device = 'auto', highlight = true, supertonicSteps = 4 } = prefs;
+  const { voiceName = DEFAULT_VOICE, rate = 1, device = 'auto', highlight = true, supertonicSteps = 8 } = prefs;
 
   // Only the natural-sounding voices: the system's downloaded Premium/Enhanced voices
   // (macOS) and "Natural" ones (Edge has hundreds), in English or the browser's own
@@ -186,8 +189,8 @@ async function init() {
     saved();
   });
 
-  // Supertonic: 4 steps is fast, 16 is the best quality; applies to the next reading.
-  const steps = SUPERTONIC_STEPS.includes(Number(supertonicSteps)) ? Number(supertonicSteps) : 4;
+  // Supertonic: 8 steps, or 16 for the best quality; applies to the next reading.
+  const steps = SUPERTONIC_STEPS.includes(Number(supertonicSteps)) ? Number(supertonicSteps) : 8;
   segmented($('steps'), SUPERTONIC_STEPS.map((n) => ({ value: n, label: `${n} steps` })), steps, async (v) => {
     await chrome.storage.sync.set({ supertonicSteps: Number(v) });
     saved();
@@ -203,21 +206,29 @@ async function init() {
   });
   showBenchmark(supertonicBenchmark);
 
-  // The server's address and key; open while the server is picked but not set up.
-  $('server-url').value = serverUrl;
-  $('server-key').value = serverKey;
-  $('server').open = device === 'server' && !(serverUrl && serverKey);
+  // The server's address and key, or the defaults; open while the server is picked
+  // but has no key. Emptying a field goes back to its default, which isn't stored, so
+  // a new default in a later version applies.
+  $('server-url').value = serverUrl || DEFAULT_SERVER_URL;
+  $('server-key').value = serverKey || defaultKey;
+  $('server').open = device === 'server' && !(serverKey || defaultKey);
+  const saveOrDefault = async (name, value, fallback) => {
+    if (value && value !== fallback) await chrome.storage.local.set({ [name]: value });
+    else await chrome.storage.local.remove(name);
+    saved();
+  };
   $('server-url').addEventListener('change', async (e) => {
-    const url = serverAddress(e.target.value);
-    e.target.setCustomValidity(url || !e.target.value.trim() ? '' : 'Enter a web address, like https://tts.example.com');
+    const typed = e.target.value.trim();
+    const url = typed ? serverAddress(typed) : DEFAULT_SERVER_URL;
+    e.target.setCustomValidity(url ? '' : 'Enter a web address, like https://tts.example.com');
     if (!e.target.reportValidity()) return;
     e.target.value = url;
-    await chrome.storage.local.set({ serverUrl: url });
-    saved();
+    await saveOrDefault('serverUrl', url, DEFAULT_SERVER_URL);
   });
   $('server-key').addEventListener('change', async (e) => {
-    await chrome.storage.local.set({ serverKey: e.target.value.trim() });
-    saved();
+    const key = e.target.value.trim() || defaultKey;
+    e.target.value = key;
+    await saveOrDefault('serverKey', key, defaultKey);
   });
 
   $('highlight').checked = highlight;

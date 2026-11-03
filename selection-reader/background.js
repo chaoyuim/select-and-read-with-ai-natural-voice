@@ -13,7 +13,8 @@
 // Saved by the popup in chrome.storage.sync: voiceName, rate, device ('auto' |
 // 'gpu' | 'cpu' | 'server', for Supertonic), supertonicSteps and highlight (highlight
 // each word while reading). The server's address and API key (serverUrl, serverKey)
-// are in chrome.storage.local, so the key stays in this browser.
+// are in chrome.storage.local, so the key stays in this browser; without them, the
+// defaults below are used.
 const DEFAULT_VOICE = 'supertonic:F1'; // bundled (see build.mjs), so a fresh install reads offline straight away
 // Speed presets, named like Edge's Read Aloud; the widget's speed button cycles them.
 const SPEEDS = [
@@ -27,21 +28,32 @@ const SUPERTONIC_CHUNK = 280; // Supertonic's helper splits at 300, so stay unde
 // Its per-request overhead is high, so longer chunks keep it faster than real time;
 // a shorter first chunk still gets the first word out sooner.
 const SUPERTONIC_FIRST_CHUNK = 120;
-const SUPERTONIC_STEPS = new Set([4, 6, 8, 16]); // denoising steps, 4 is the fastest
+const SUPERTONIC_STEPS = new Set([8, 16]); // denoising steps: 8, or 16 for the best quality
 const SUPERTONIC = 'supertonic:'; // prefix of Supertonic voice names, e.g. "supertonic:F1"
 
 const settings = async () => ({
-  voiceName: DEFAULT_VOICE, rate: DEFAULT_RATE, device: 'auto', highlight: true, supertonicSteps: 4,
+  voiceName: DEFAULT_VOICE, rate: DEFAULT_RATE, device: 'auto', highlight: true, supertonicSteps: 8,
   ...(await chrome.storage.sync.get(['voiceName', 'rate', 'device', 'highlight', 'supertonicSteps'])),
 });
 
-// Denoising steps for Supertonic: the saved choice, or the fastest.
-const stepsOf = (prefs) => (SUPERTONIC_STEPS.has(Number(prefs.supertonicSteps)) ? Number(prefs.supertonicSteps) : 4);
+// Denoising steps for Supertonic: the saved choice, or 8 (older versions also offered 4 and 6).
+const stepsOf = (prefs) => (SUPERTONIC_STEPS.has(Number(prefs.supertonicSteps)) ? Number(prefs.supertonicSteps) : 8);
 
-// The user's Supertonic server, { url, key }, or null when it isn't set up.
+// The Supertonic server to use unless the popup sets another (keep in step with
+// popup.js), and its API key if the build was given one: server-default.json, made by
+// build.mjs from server.local.json. Git ignores both, so the key isn't published.
+const DEFAULT_SERVER_URL = 'https://supertonic3.chaoyu.nl';
+let defaultServerKey = null;
+const getDefaultServerKey = () =>
+  (defaultServerKey ??= fetch(chrome.runtime.getURL('server-default.json'))
+    .then((r) => r.json())
+    .then((d) => d.key || '', () => ''));
+
+// The Supertonic server, { url, key }, or null when there's no key for it.
 async function serverConfig() {
   const { serverUrl, serverKey } = await chrome.storage.local.get(['serverUrl', 'serverKey']);
-  return serverUrl && serverKey ? { url: serverUrl, key: serverKey } : null;
+  const key = serverKey || (await getDefaultServerKey());
+  return key ? { url: serverUrl || DEFAULT_SERVER_URL, key } : null;
 }
 
 // The device to run Supertonic on. 'auto' uses the winner of the last speed test

@@ -5,3 +5,7 @@ node_modules/
 selection-reader/offscreen.js
 selection-reader/vendor/
 selection-reader/models/
+selection-reader/server-default.json
+
+# The default server's API key, kept out of the repository (see build.mjs)
+server.local.json

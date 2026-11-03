@@ -1,6 +1,6 @@
 // Selection Reader — Supertonic 3 player (runs in the extension's offscreen document).
 //
-// The fast local engine: four ONNX models and one style file per voice, run with 4 to
+// The fast local engine: four ONNX models and one style file per voice, run with 8 or
 // 16 denoising steps. The browser example this is based on (supertonic-helper.js) is MIT;
 // the model weights are OpenRAIL-M (see README).
 import * as ort from 'onnxruntime-web';
@@ -9,10 +9,10 @@ import { loadTextToSpeech, loadVoiceStyle, writeWavFile } from './supertonic-hel
 const ONNX_DIR = chrome.runtime.getURL('models/supertonic/onnx');
 const VOICE_DIR = chrome.runtime.getURL('models/supertonic/voice_styles');
 const VOICES = new Set(['F1', 'F2', 'F3', 'F4', 'F5', 'M1', 'M2', 'M3', 'M4', 'M5']);
-// 4 is the fastest; 16 sounds best but only keeps up on a GPU (~11x real time on an
-// M5, ~1x on its CPU). The popup picks.
-const STEPS = new Set([4, 6, 8, 16]);
-const DEFAULT_STEPS = 4;
+// The popup picks. 16 sounds best but only keeps up on a GPU (~9x real time on an M5,
+// ~1x on its CPU); 8 is ~22x and ~2x there.
+const STEPS = new Set([8, 16]);
+const DEFAULT_STEPS = 8;
 
 // The ONNX runtime's wasm ships inside the extension (extensions can't load code from
 // a CDN). CPU threads: the runtime's default (up to 4) leaves speed on the table, and
