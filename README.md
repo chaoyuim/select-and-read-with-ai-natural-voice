@@ -44,6 +44,6 @@ Kokoro runs through [kokoro-js](https://github.com/hexgrad/kokoro) and [Transfor
 
 ## License
 
-Copyright (C) 2026 [chaoyuim](https://github.com/chaoyuim).
+Copyright (c) 2026 [chaoyuim](https://github.com/chaoyuim). MIT, see [LICENSE](LICENSE): free for anyone to use, change and share.
 
-GPL-3.0-or-later, see [LICENSE](LICENSE). The GPL fits the built extension, which includes eSpeak NG.
+The MIT licence covers the code in this repository. A built copy of the extension also contains the third-party software above under its own licences; in particular, anyone distributing a built copy has to follow the GPL-3.0 for the eSpeak NG part.
