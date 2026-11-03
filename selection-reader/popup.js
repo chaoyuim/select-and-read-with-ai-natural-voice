@@ -22,7 +22,60 @@ const SUPERTONIC_VOICES = ['F1', 'F2', 'F3', 'F4', 'F5', 'M1', 'M2', 'M3', 'M4',
 }));
 
 const isSupertonic = () => select.value.startsWith('supertonic:');
-const SUPERTONIC_STEPS = [8, 16];
+
+// Supertonic 3's languages (keep in step with SUPERTONIC_LANGS in background.js), with
+// what Play sample says in each; 'na' is its language-agnostic mode.
+const SAMPLES = {
+  en: 'Hello! This is how I sound when reading your selection.',
+  ar: 'مرحبًا! هكذا يبدو صوتي.',
+  bg: 'Здравейте! Ето как звучи гласът ми.',
+  cs: 'Dobrý den! Takhle zní můj hlas.',
+  da: 'Hej! Sådan lyder min stemme.',
+  de: 'Hallo! So klingt meine Stimme.',
+  el: 'Γεια σας! Έτσι ακούγεται η φωνή μου.',
+  es: '¡Hola! Así suena mi voz.',
+  et: 'Tere! Nii kõlab minu hääl.',
+  fi: 'Hei! Tältä ääneni kuulostaa.',
+  fr: 'Bonjour ! Voici à quoi ressemble ma voix.',
+  hi: 'नमस्ते! मेरी आवाज़ ऐसी सुनाई देती है।',
+  hr: 'Bok! Ovako zvuči moj glas.',
+  hu: 'Szia! Így szól a hangom.',
+  id: 'Halo! Beginilah suara saya.',
+  it: 'Ciao! Ecco come suona la mia voce.',
+  ja: 'こんにちは！これが私の声です。',
+  ko: '안녕하세요! 제 목소리는 이렇습니다.',
+  lt: 'Labas! Štai kaip skamba mano balsas.',
+  lv: 'Sveiki! Lūk, kā skan mana balss.',
+  nl: 'Hallo! Zo klinkt mijn stem.',
+  pl: 'Cześć! Tak brzmi mój głos.',
+  pt: 'Olá! É assim que a minha voz soa.',
+  ro: 'Bună! Așa sună vocea mea.',
+  ru: 'Здравствуйте! Вот как звучит мой голос.',
+  sk: 'Dobrý deň! Takto znie môj hlas.',
+  sl: 'Pozdravljeni! Tako zveni moj glas.',
+  sv: 'Hej! Så här låter min röst.',
+  tr: 'Merhaba! Sesim böyle duyuluyor.',
+  uk: 'Привіт! Ось як звучить мій голос.',
+  vi: 'Xin chào! Đây là giọng nói của tôi.',
+  na: 'Hello! This is how I sound when reading your selection.',
+};
+
+// English first, then the rest by name ("Dutch (Nederlands)"), then 'na'.
+function fillLanguages(current) {
+  const english = new Intl.DisplayNames(['en'], { type: 'language' });
+  const name = (code) => {
+    const own = new Intl.DisplayNames([code], { type: 'language' }).of(code);
+    const en = english.of(code);
+    return own && own.toLowerCase() !== en.toLowerCase() ? `${en} (${own})` : en;
+  };
+  const others = Object.keys(SAMPLES)
+    .filter((code) => code !== 'en' && code !== 'na')
+    .map((code) => ({ code, text: name(code) }))
+    .sort((a, b) => a.text.localeCompare(b.text));
+  const items = [{ code: 'en', text: 'English' }, ...others, { code: 'na', text: 'Other or mixed' }];
+  for (const { code, text } of items) $('lang').append(new Option(text, code, false, code === current));
+}
+const SUPERTONIC_STEPS = [8, 16, 24, 32];
 
 // ── Voice ────────────────────────────────────────────────
 
@@ -38,7 +91,7 @@ function addGroup(label, items, current) {
 // Supertonic's settings only matter when a Supertonic voice is picked.
 function showVoiceSettings() {
   const supertonic = isSupertonic();
-  for (const id of ['supertonic', 'local', 'hint']) $(id).hidden = !supertonic;
+  for (const id of ['supertonic', 'local', 'hint', 'language']) $(id).hidden = !supertonic;
 }
 
 // ── Supertonic: device, server and speed test ────────────
@@ -158,13 +211,15 @@ function segmented(container, options, current, onPick) {
 
 async function init() {
   const [prefs, voices, { supertonicBenchmark, serverUrl, serverKey }, defaultKey] = await Promise.all([
-    chrome.storage.sync.get(['voiceName', 'rate', 'device', 'highlight', 'supertonicSteps']),
+    chrome.storage.sync.get(['voiceName', 'rate', 'device', 'highlight', 'supertonicSteps', 'supertonicLang']),
     chrome.tts.getVoices(),
     chrome.storage.local.get(['supertonicBenchmark', 'serverUrl', 'serverKey']),
     // The build's default key, if any (see background.js).
     fetch('server-default.json').then((r) => r.json()).then((d) => d.key || '', () => ''),
   ]);
-  const { voiceName = DEFAULT_VOICE, rate = 1, device = 'auto', highlight = true, supertonicSteps = 8 } = prefs;
+  const {
+    voiceName = DEFAULT_VOICE, rate = 1, device = 'auto', highlight = true, supertonicSteps = 8, supertonicLang = 'en',
+  } = prefs;
 
   // Only the natural-sounding voices: the system's downloaded Premium/Enhanced voices
   // (macOS) and "Natural" ones (Edge has hundreds), in English or the browser's own
@@ -189,7 +244,14 @@ async function init() {
     saved();
   });
 
-  // Supertonic: 8 steps, or 16 for the best quality; applies to the next reading.
+  // Supertonic's language; applies to the next reading.
+  fillLanguages(supertonicLang in SAMPLES ? supertonicLang : 'en');
+  $('lang').addEventListener('change', async (e) => {
+    await chrome.storage.sync.set({ supertonicLang: e.target.value });
+    saved();
+  });
+
+  // Supertonic: 8 steps, up to 32 for the best quality; applies to the next reading.
   const steps = SUPERTONIC_STEPS.includes(Number(supertonicSteps)) ? Number(supertonicSteps) : 8;
   segmented($('steps'), SUPERTONIC_STEPS.map((n) => ({ value: n, label: `${n} steps` })), steps, async (v) => {
     await chrome.storage.sync.set({ supertonicSteps: Number(v) });
@@ -244,11 +306,12 @@ select.addEventListener('change', async () => {
   saved();
 });
 
-// Played by the background script with the saved settings, so Supertonic voices work here too.
+// Played by the background script with the saved settings, so Supertonic voices work
+// here too; in the language picked for Supertonic.
 $('test').addEventListener('click', () => {
   chrome.runtime.sendMessage({
     type: 'reader-sample',
-    text: 'Hello! This is how I sound when reading your selection.',
+    text: isSupertonic() ? SAMPLES[$('lang').value] : SAMPLES.en,
   });
 });
 

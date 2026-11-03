@@ -55,14 +55,15 @@ function generate(job, i) {
 async function synthesize(job, text, speed) {
   if (job.server && !job.serverFailed) {
     try {
-      return await speakServer(job.server, text, job.voice, job.steps, speed, job.abort.signal);
+      return await speakServer(job.server, text, job.voice, job.steps, speed, job.lang, job.abort.signal);
     } catch (err) {
       if (job.cancelled) return null;
       console.warn('[Selection Reader] Supertonic server failed, reading on this computer:', err.message);
       job.serverFailed = true;
     }
   }
-  return speakSupertonic(text, job.voice, job.steps, await backendFor(job.server ? 'auto' : job.device), speed);
+  const backend = await backendFor(job.server ? 'auto' : job.device);
+  return speakSupertonic(text, job.voice, job.steps, backend, speed, job.lang);
 }
 
 // The model doesn't say when each word is spoken, so estimate it: spread the words
@@ -89,7 +90,7 @@ function estimateWordStarts(text, { audio: samples, sampling_rate: rate }) {
 }
 
 // ── Playback ─────────────────────────────────────────────
-// job: { id, chunks, voice, rate, device, steps, server, paused, cancelled, abort,
+// job: { id, chunks, voice, rate, device, steps, lang, server, paused, cancelled, abort,
 //   serverFailed, sentenceSpeed }; abort cancels a server request in flight.
 let current = null;
 let audio = null;
@@ -220,7 +221,7 @@ chrome.runtime.onMessage.addListener((msg) => {
       stop();
       current = {
         id: msg.id, chunks: msg.chunks, voice: msg.voice, rate: msg.rate, device: msg.device,
-        steps: msg.steps, server: msg.server, paused: false, abort: new AbortController(),
+        steps: msg.steps, lang: msg.lang, server: msg.server, paused: false, abort: new AbortController(),
       };
       play(current, msg.start ?? 0);
       break;

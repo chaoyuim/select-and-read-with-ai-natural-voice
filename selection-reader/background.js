@@ -11,8 +11,8 @@
 
 // ── Settings ─────────────────────────────────────────────
 // Saved by the popup in chrome.storage.sync: voiceName, rate, device ('auto' |
-// 'gpu' | 'cpu' | 'server', for Supertonic), supertonicSteps and highlight (highlight
-// each word while reading). The server's address and API key (serverUrl, serverKey)
+// 'gpu' | 'cpu' | 'server', for Supertonic), supertonicSteps, supertonicLang and
+// highlight (highlight each word while reading). The server's address and API key (serverUrl, serverKey)
 // are in chrome.storage.local, so the key stays in this browser; without them, the
 // defaults below are used.
 const DEFAULT_VOICE = 'supertonic:F1'; // bundled (see build.mjs), so a fresh install reads offline straight away
@@ -28,16 +28,27 @@ const SUPERTONIC_CHUNK = 280; // Supertonic's helper splits at 300, so stay unde
 // Its per-request overhead is high, so longer chunks keep it faster than real time;
 // a shorter first chunk still gets the first word out sooner.
 const SUPERTONIC_FIRST_CHUNK = 120;
-const SUPERTONIC_STEPS = new Set([8, 16]); // denoising steps: 8, or 16 for the best quality
+const SUPERTONIC_CJK_CHUNK = 120; // its helper splits Japanese and Korean at 120
+const SUPERTONIC_STEPS = new Set([8, 16, 24, 32]); // denoising steps: more sound cleaner but take longer
+// The languages Supertonic 3 reads (keep in step with popup.js); 'na' is its
+// language-agnostic mode, for other languages and mixed text.
+const SUPERTONIC_LANGS = new Set([
+  'en', 'ar', 'bg', 'cs', 'da', 'de', 'el', 'es', 'et', 'fi', 'fr', 'hi', 'hr', 'hu', 'id', 'it',
+  'ja', 'ko', 'lt', 'lv', 'nl', 'pl', 'pt', 'ro', 'ru', 'sk', 'sl', 'sv', 'tr', 'uk', 'vi', 'na',
+]);
 const SUPERTONIC = 'supertonic:'; // prefix of Supertonic voice names, e.g. "supertonic:F1"
 
 const settings = async () => ({
   voiceName: DEFAULT_VOICE, rate: DEFAULT_RATE, device: 'auto', highlight: true, supertonicSteps: 8,
-  ...(await chrome.storage.sync.get(['voiceName', 'rate', 'device', 'highlight', 'supertonicSteps'])),
+  supertonicLang: 'en',
+  ...(await chrome.storage.sync.get(['voiceName', 'rate', 'device', 'highlight', 'supertonicSteps', 'supertonicLang'])),
 });
 
 // Denoising steps for Supertonic: the saved choice, or 8 (older versions also offered 4 and 6).
 const stepsOf = (prefs) => (SUPERTONIC_STEPS.has(Number(prefs.supertonicSteps)) ? Number(prefs.supertonicSteps) : 8);
+
+// The language Supertonic reads in: the saved choice, or English.
+const langOf = (prefs) => (SUPERTONIC_LANGS.has(prefs.supertonicLang) ? prefs.supertonicLang : 'en');
 
 // The Supertonic server to use unless the popup sets another (keep in step with
 // popup.js), and its API key if the build was given one: server-default.json, made by
@@ -144,14 +155,16 @@ function splitLong(sentence, max = MAX_CHUNK) {
 }
 
 // Supertonic's per-request overhead is high, so it reads in longer chunks than the
-// system voices: sentences are grouped up to 280 characters (its helper's own limit is 300), while
-// the first chunk stays shorter so the first word is heard sooner.
-function toSupertonicChunks(text) {
-  const segmenter = new Intl.Segmenter(undefined, { granularity: 'sentence' });
+// system voices: sentences are grouped up to 280 characters (its helper's own limit is 300;
+// 120 for Japanese and Korean), while the first chunk stays shorter so the first word is
+// heard sooner.
+function toSupertonicChunks(text, lang) {
+  const max = lang === 'ja' || lang === 'ko' ? SUPERTONIC_CJK_CHUNK : SUPERTONIC_CHUNK;
+  const segmenter = new Intl.Segmenter(lang === 'na' ? undefined : lang, { granularity: 'sentence' });
   const sentences = [];
   for (const { segment } of segmenter.segment(text)) {
     const sentence = segment.replace(/\s+/g, ' ').trim();
-    if (sentence) sentences.push(...splitLong(sentence, SUPERTONIC_CHUNK));
+    if (sentence) sentences.push(...splitLong(sentence, max));
   }
   if (!sentences.length) return [];
 
@@ -160,7 +173,7 @@ function toSupertonicChunks(text) {
   let current = '';
   for (const sentence of [...firstParts.slice(1), ...sentences.slice(1)]) {
     const candidate = current ? `${current} ${sentence}` : sentence;
-    if (candidate.length > SUPERTONIC_CHUNK && current) {
+    if (candidate.length > max && current) {
       chunks.push(current);
       current = sentence;
     } else {
@@ -274,7 +287,7 @@ const supertonicEngine = {
     if (session !== s) return; // stopped while the document was being created
     toOffscreen({
       type: 'speak', id: s.id, chunks: s.chunks, voice: s.voice.supertonic,
-      rate: s.rate, device: s.device, steps: s.steps, server: s.server, start,
+      rate: s.rate, device: s.device, steps: s.steps, lang: s.lang, server: s.server, start,
     });
   },
   pause: () => toOffscreen({ type: 'pause' }),
@@ -308,8 +321,8 @@ async function benchmark() {
 
 // ── Reading ──────────────────────────────────────────────
 // The reading in progress, or null:
-// { id, tabId, frameId, engine, chunks, voice, rate, device, steps, server, index,
-//   total, paused, status, wordOffsets, highlight }
+// { id, tabId, frameId, engine, chunks, voice, rate, device, steps, lang, server,
+//   index, total, paused, status, wordOffsets, highlight }
 // tabId is null for the popup's sample; frameId is the frame whose widget shows the
 // player (0 = the page itself, others are iframes). index/total/paused/rate/status
 // are what the widget shows; status is set while Supertonic loads ("Loading voice…").
@@ -370,7 +383,8 @@ async function read(tabId, { text, frameId = 0, fromPage = true }) {
   const serverSetUp = engine === supertonicEngine ? await serverConfig() : null;
   const device = engine === supertonicEngine ? await deviceFor(prefs.device, serverSetUp) : prefs.device;
   const server = device === 'server' ? serverSetUp : null;
-  const chunks = engine === supertonicEngine ? toSupertonicChunks(text) : toChunks(text);
+  const lang = langOf(prefs);
+  const chunks = engine === supertonicEngine ? toSupertonicChunks(text, lang) : toChunks(text);
   const steps = stepsOf(prefs);
   let words = 0;
   const wordOffsets = chunks.map((chunk) => {
@@ -379,7 +393,7 @@ async function read(tabId, { text, frameId = 0, fromPage = true }) {
     return before;
   });
   const s = (session = {
-    id: nextId++, tabId, frameId, engine, chunks, voice, rate: prefs.rate, device, steps, server,
+    id: nextId++, tabId, frameId, engine, chunks, voice, rate: prefs.rate, device, steps, lang, server,
     index: 1, total: chunks.length, paused: false,
     status: engine === ttsEngine ? null : 'Loading voice…',
     wordOffsets, highlight: prefs.highlight && fromPage && tabId != null,

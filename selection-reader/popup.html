@@ -78,7 +78,13 @@
     <section>
       <h2><label for="voice">Voice</label></h2>
       <select id="voice"></select>
-      <p class="hint" id="hint" hidden>Supertonic 3 (English, 44.1 kHz) runs on your computer, offline, or on your own server if you set one up below.</p>
+      <p class="hint" id="hint" hidden>Supertonic 3 (31 languages, 44.1 kHz) runs on your computer, offline, or on your own server if you set one up below.</p>
+    </section>
+
+    <section id="language" hidden>
+      <h2><label for="lang">Language</label></h2>
+      <select id="lang"></select>
+      <p class="hint">The language Supertonic reads in. For a language that isn't listed, or text that mixes languages, pick "Other or mixed".</p>
     </section>
 
     <section>
@@ -89,7 +95,7 @@
     <section id="supertonic" hidden>
       <h2 id="steps-title">Supertonic quality</h2>
       <div class="segmented" role="radiogroup" aria-labelledby="steps-title" id="steps"></div>
-      <p class="hint" id="steps-hint">16 steps sounds a little cleaner than 8 but takes twice as long, so it needs a GPU (here or on your server): on a CPU it can pause between sentences. Takes effect on the next reading.</p>
+      <p class="hint" id="steps-hint">More steps sound a little cleaner but take longer: 16 takes twice as long as 8, and 32 four times. Above 8 needs a GPU (here or on your server): on a CPU it can pause between sentences. Takes effect on the next reading.</p>
     </section>
 
     <section id="local" hidden>

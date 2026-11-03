@@ -10,12 +10,12 @@ const SAMPLE_RATE = 44100; // Supertonic 3's
 const TIMEOUT_MS = 15_000; // then the sentence is made locally instead (see offscreen.js)
 
 // server: { url, key }. Returns { blob, samples, sampleRate }, like speakSupertonic.
-export async function speakServer(server, text, voice, steps, speed = 1, signal) {
+export async function speakServer(server, text, voice, steps, speed = 1, lang = 'en', signal) {
   const response = await fetch(`${server.url}/v1/audio/speech`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${server.key}`, 'Content-Type': 'application/json' },
     // FLAC: lossless like WAV, at half the size.
-    body: JSON.stringify({ input: text, voice, steps, speed, lang: 'en', response_format: 'flac' }),
+    body: JSON.stringify({ input: text, voice, steps, speed, lang, response_format: 'flac' }),
     signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(TIMEOUT_MS)]) : AbortSignal.timeout(TIMEOUT_MS),
   });
   if (!response.ok) throw new Error(`Server: ${await problem(response)}`);
