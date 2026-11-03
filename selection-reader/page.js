@@ -33,7 +33,9 @@
       .bar { display: flex; align-items: center; gap: 4px; padding: 4px;
              background: #1d2230; color: #f3f5f9; border: 1px solid rgba(255,255,255,.08);
              border-radius: 999px; box-shadow: 0 6px 24px rgba(0,0,0,.28);
-             font: 500 13px/1 system-ui, -apple-system, "Segoe UI", sans-serif; }
+             font: 500 13px/1 system-ui, -apple-system, "Segoe UI", sans-serif;
+             transition: opacity .3s; }
+      .bar.idle { opacity: .5; }
       .player { display: flex; align-items: center; gap: 2px; }
       .label { padding: 0 10px 0 10px; min-width: 92px; color: #c9cfdb;
                font-variant-numeric: tabular-nums; white-space: nowrap; }
@@ -57,6 +59,7 @@
         <button class="stop icon" title="Stop" aria-label="Stop">${ICONS.stop}</button>
       </span>
     </div>`;
+  const bar = root.querySelector('.bar');
   const readButton = root.querySelector('.read');
   const player = root.querySelector('.player');
   const label = root.querySelector('.label');
@@ -68,6 +71,7 @@
   let hasSelection = false;
   let reading = null;
   let placed = false; // has the widget been given a position yet?
+  let shown = false; // was the widget on screen at the last update?
 
   // After the extension is reloaded or removed, this copy's connection is gone and
   // sending throws "Extension context invalidated". Drop the widget instead of leaving
@@ -122,6 +126,8 @@
     const visible = hasSelection || !!reading;
     if (visible && !host.isConnected) document.documentElement.append(host);
     host.style.display = visible ? 'block' : 'none';
+    if (visible && !shown) wake();
+    shown = visible;
     // Started without a selection on screen (e.g. by shortcut): use the top centre.
     if (visible && !placed) {
       host.style.left = `${Math.max(8, (innerWidth - host.offsetWidth) / 2)}px`;
@@ -262,6 +268,24 @@
     window.scrollBy({ top: rect.top - innerHeight * 0.35, behavior: 'smooth' });
   }
 
+  // ── Fading when idle ────────────────────────────────────
+  // After 5 s without being pointed at or used, the widget fades to half opacity so it
+  // hides less of the page. Pointing at it (or tabbing into it) brings it back at once,
+  // and so does a new selection or reading.
+  const IDLE_MS = 5000;
+  let idleTimer = null;
+  let hovered = false;
+  let focused = false;
+  function wake() {
+    bar.classList.remove('idle');
+    clearTimeout(idleTimer);
+    if (!hovered && !focused) idleTimer = setTimeout(() => bar.classList.add('idle'), IDLE_MS);
+  }
+  bar.addEventListener('pointerenter', () => { hovered = true; wake(); });
+  bar.addEventListener('pointerleave', () => { hovered = false; wake(); });
+  bar.addEventListener('focusin', () => { focused = true; wake(); });
+  bar.addEventListener('focusout', () => { focused = false; wake(); });
+
   // ── Events ──────────────────────────────────────────────
 
   // Show the Read button once a selection is finished (mouse released or keys let go).
@@ -272,6 +296,7 @@
       update();
       if (hasSelection) {
         placeAtSelection();
+        wake(); // a new selection: show the Read button in full
         send('prepare').catch(() => {}); // lets a local voice model start loading
       }
     });
@@ -308,6 +333,7 @@
     const starting = !reading && msg.state;
     reading = msg.state;
     if (starting && reading.highlight) startHighlighting();
+    if (starting) wake();
     update();
   });
 
