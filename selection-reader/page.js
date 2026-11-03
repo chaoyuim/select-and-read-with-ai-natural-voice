@@ -6,8 +6,16 @@
 (() => {
   // After an extension reload, an old copy can linger with a dead connection;
   // only reuse a copy that can still talk to the extension.
-  if (window.__readerBar?.alive()) return;
-  window.__readerBar?.remove();
+  let reusable = false;
+  try {
+    reusable = !!window.__readerBar?.alive();
+  } catch {
+    // A dead copy whose chrome.* accessors throw: replace it.
+  }
+  if (reusable) return;
+  try {
+    window.__readerBar?.remove();
+  } catch {}
 
   const ICONS = {
     play: '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4.5 2.8v10.4L13 8z"/></svg>',
@@ -61,8 +69,30 @@
   let reading = null;
   let placed = false; // has the widget been given a position yet?
 
-  const send = (action, extra) =>
-    chrome.runtime.sendMessage({ type: 'reader-control', action, ...extra });
+  // After the extension is reloaded or removed, this copy's connection is gone and
+  // sending throws "Extension context invalidated". Drop the widget instead of leaving
+  // a button that only produces errors (the next action injects a fresh copy).
+  let dead = false;
+  function retire() {
+    if (dead) return;
+    dead = true;
+    window.__readerBar = null;
+    host.remove();
+    clearHighlights();
+  }
+
+  const send = (action, extra) => {
+    if (dead) return Promise.resolve();
+    try {
+      return chrome.runtime.sendMessage({ type: 'reader-control', action, ...extra }).catch((err) => {
+        if (/Extension context invalidated/.test(err?.message ?? '')) retire();
+      });
+    } catch (err) {
+      // sendMessage throws synchronously when the context is already invalid.
+      if (/Extension context invalidated/.test(err?.message ?? '')) retire();
+      return Promise.resolve();
+    }
+  };
 
   // Keep the page's selection when a widget button is pressed.
   root.addEventListener('mousedown', (e) => e.preventDefault());
@@ -282,16 +312,20 @@
   });
 
   // If this tab is already being read (e.g. the page was reloaded), show the player.
-  chrome.runtime
-    .sendMessage({ type: 'reader-get-state' })
-    .then((state) => {
-      reading = state;
-      update();
-    })
-    .catch(() => {});
+  try {
+    chrome.runtime
+      .sendMessage({ type: 'reader-get-state' })
+      .then((state) => {
+        reading = state;
+        update();
+      })
+      .catch(() => {});
+  } catch {
+    // This copy was left over from an extension instance that has since been reloaded.
+  }
 
   window.__readerBar = {
-    alive: () => !!chrome.runtime?.id,
+    alive: () => !dead && !!chrome.runtime?.id,
     remove: () => {
       host.remove();
       clearHighlights();
