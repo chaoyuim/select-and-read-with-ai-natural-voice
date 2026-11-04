@@ -4,7 +4,7 @@ A Chrome and Edge extension that reads the text you select aloud, sentence by se
 
 - Select text and click the floating **▶ Read** button; it turns into a player (pause, speed, stop). Supertonic speaks Slow and Fast at that pace itself rather than stretching the audio.
 - Each word is highlighted as it's read.
-- Voices: Supertonic 3 (local and offline, ten voices, default **F1**, quality 8 to 32 denoising steps), the system's Premium/Enhanced voices, and Edge's Microsoft Natural voices in Edge.
+- Voices: Supertonic 3 (local and offline, ten voices, default **F1**, quality 8 to 32 denoising steps), plus **USER_FEMALE_01** to **USER_FEMALE_03**, which run on your Supertonic server only (see [below](#your-own-supertonic-server)), the system's Premium/Enhanced voices, and Edge's Microsoft Natural voices in Edge.
 - Supertonic reads in the language picked in the popup: English (the default) or any of its 30 other languages, such as Japanese or Dutch, or "Other or mixed" for text in other or several languages.
 - Supertonic runs on the GPU (WebGPU) or the CPU, or on [your own Supertonic server](#your-own-supertonic-server); the popup's speed test measures each, and Auto then uses whichever was clearly fastest.
 - Works inside iframes (e.g. e-learning lessons). Shortcuts: Alt+R read, Alt+P pause/resume, Alt+S stop.

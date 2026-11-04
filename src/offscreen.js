@@ -51,17 +51,20 @@ function generate(job, i) {
 
 // One sentence from the user's server (job.server, when the device is 'server'), or
 // from the local model. If the server fails (offline, wrong key…), the rest of the
-// reading is made here, so a dead server doesn't hold up every sentence.
+// reading is made here, so a dead server doesn't hold up every sentence. A server-only
+// voice (job.serverOnly) has no local model behind it, so it can't fall back.
 async function synthesize(job, text, speed) {
   if (job.server && !job.serverFailed) {
     try {
       return await speakServer(job.server, text, job.voice, job.steps, speed, job.lang, job.abort.signal);
     } catch (err) {
       if (job.cancelled) return null;
+      if (job.serverOnly) throw new Error(`Your Supertonic server couldn't make ${job.voice}: ${err.message}`);
       console.warn('[Selection Reader] Supertonic server failed, reading on this computer:', err.message);
       job.serverFailed = true;
     }
   }
+  if (job.serverOnly) throw new Error(`The ${job.voice} voice is on your Supertonic server only: set one up in the popup.`);
   const backend = await backendFor(job.server ? 'auto' : job.device);
   return speakSupertonic(text, job.voice, job.steps, backend, speed, job.lang);
 }
@@ -90,8 +93,9 @@ function estimateWordStarts(text, { audio: samples, sampling_rate: rate }) {
 }
 
 // ── Playback ─────────────────────────────────────────────
-// job: { id, chunks, voice, rate, device, steps, lang, server, paused, cancelled, abort,
-//   serverFailed, sentenceSpeed }; abort cancels a server request in flight.
+// job: { id, chunks, voice, rate, device, steps, lang, server, serverOnly, paused,
+//   cancelled, abort, serverFailed, sentenceSpeed }; abort cancels a server request in
+// flight; serverOnly is a voice the server has and this computer doesn't.
 let current = null;
 let audio = null;
 
@@ -221,7 +225,8 @@ chrome.runtime.onMessage.addListener((msg) => {
       stop();
       current = {
         id: msg.id, chunks: msg.chunks, voice: msg.voice, rate: msg.rate, device: msg.device,
-        steps: msg.steps, lang: msg.lang, server: msg.server, paused: false, abort: new AbortController(),
+        steps: msg.steps, lang: msg.lang, server: msg.server, serverOnly: msg.serverOnly,
+        paused: false, abort: new AbortController(),
       };
       play(current, msg.start ?? 0);
       break;

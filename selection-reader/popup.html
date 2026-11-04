@@ -34,6 +34,7 @@
     .segmented input { position: absolute; opacity: 0; pointer-events: none; }
     .segmented span { display: block; padding: 6px 0; text-align: center; border-radius: 7px; cursor: pointer; color: var(--muted); }
     .segmented input:checked + span { background: var(--bg); color: var(--text); font-weight: 600; box-shadow: 0 1px 3px rgba(0,0,0,.15); }
+    .segmented input:disabled + span { opacity: .45; cursor: default; }
     .segmented input:focus-visible + span { outline: 2px solid var(--accent); }
     .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
     /* Switch */

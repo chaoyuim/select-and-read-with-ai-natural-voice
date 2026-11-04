@@ -14,14 +14,20 @@ const SPEEDS = [
 const $ = (id) => document.getElementById(id);
 const select = $('voice');
 
-// Supertonic 3's ten preset voices (F1-F5 female, M1-M5 male); all are bundled.
-const SUPERTONIC_VOICES = ['F1', 'F2', 'F3', 'F4', 'F5', 'M1', 'M2', 'M3', 'M4', 'M5'].map((id) => ({
+// Supertonic 3's ten preset voices (F1-F5 female, M1-M5 male); all are bundled. The
+// server-only ones (keep in step with background.js) are on the user's own server.
+const SERVER_VOICES = new Set(['USER_FEMALE_01', 'USER_FEMALE_02', 'USER_FEMALE_03']);
+const SUPERTONIC_VOICES = ['F1', 'F2', 'F3', 'F4', 'F5', 'M1', 'M2', 'M3', 'M4', 'M5', ...SERVER_VOICES].map((id) => ({
   id,
   value: `supertonic:${id}`,
-  text: `${id} (${id.startsWith('F') ? 'female' : 'male'})`,
+  text: `${id} (${id.startsWith('F') || id.includes('FEMALE') ? 'female' : 'male'}${SERVER_VOICES.has(id) ? ', server' : ''})`,
 }));
 
 const isSupertonic = () => select.value.startsWith('supertonic:');
+const isServerVoice = () => isSupertonic() && SERVER_VOICES.has(select.value.slice('supertonic:'.length));
+
+let devicePref = 'auto'; // the saved device; a server-only voice shows Server instead
+let hasServerKey = false; // the server's key, from the popup or the build
 
 // Supertonic 3's languages (keep in step with SUPERTONIC_LANGS in background.js), with
 // what Play sample says in each; 'na' is its language-agnostic mode.
@@ -92,6 +98,17 @@ function addGroup(label, items, current) {
 function showVoiceSettings() {
   const supertonic = isSupertonic();
   for (const id of ['supertonic', 'local', 'hint', 'language']) $(id).hidden = !supertonic;
+  showDevice(isServerVoice() ? 'server' : devicePref);
+}
+
+// The device radios; a server-only voice can only use the server.
+function showDevice(device) {
+  const locked = isServerVoice();
+  for (const input of document.querySelectorAll('#device input')) {
+    input.disabled = locked && input.value !== 'server';
+    input.checked = input.value === device;
+  }
+  showDeviceHint(device);
 }
 
 // ── Supertonic: device, server and speed test ────────────
@@ -103,9 +120,13 @@ const DEVICE_HINTS = {
   server: 'Uses your own Supertonic server, set up below. If it can\'t be reached, Supertonic runs on this computer instead.',
 };
 const DEVICE_NAMES = { gpu: 'GPU', cpu: 'CPU', server: 'Server' };
+const SERVER_VOICE_HINT =
+  'This voice is on your Supertonic server only, so it always reads through it. Set the server up below.';
 
 function showDeviceHint(device) {
-  $('device-hint').textContent = DEVICE_HINTS[device];
+  $('device-hint').textContent = isServerVoice() ? SERVER_VOICE_HINT : DEVICE_HINTS[device];
+  // A server-only voice needs the server's key: ask for it.
+  if ((isServerVoice() || device === 'server') && !hasServerKey) $('server').open = true;
 }
 
 // The server's address as typed, without a trailing slash or path after the API's
@@ -220,6 +241,8 @@ async function init() {
   const {
     voiceName = DEFAULT_VOICE, rate = 1, device = 'auto', highlight = true, supertonicSteps = 8, supertonicLang = 'en',
   } = prefs;
+  devicePref = device;
+  hasServerKey = !!(serverKey || defaultKey);
 
   // Only the natural-sounding voices: the system's downloaded Premium/Enhanced voices
   // (macOS) and "Natural" ones (Edge has hundreds), in English or the browser's own
@@ -258,12 +281,12 @@ async function init() {
     saved();
   });
 
-  for (const input of document.querySelectorAll('#device input')) input.checked = input.value === device;
-  showDeviceHint(device);
+  showDevice(isServerVoice() ? 'server' : devicePref);
   $('device').addEventListener('change', async (e) => {
-    await chrome.storage.sync.set({ device: e.target.value });
-    showDeviceHint(e.target.value);
-    if (e.target.value === 'server') $('server').open = true;
+    devicePref = e.target.value;
+    await chrome.storage.sync.set({ device: devicePref });
+    showDeviceHint(devicePref);
+    if (devicePref === 'server') $('server').open = true;
     saved();
   });
   showBenchmark(supertonicBenchmark);
@@ -273,7 +296,6 @@ async function init() {
   // a new default in a later version applies.
   $('server-url').value = serverUrl || DEFAULT_SERVER_URL;
   $('server-key').value = serverKey || defaultKey;
-  $('server').open = device === 'server' && !(serverKey || defaultKey);
   const saveOrDefault = async (name, value, fallback) => {
     if (value && value !== fallback) await chrome.storage.local.set({ [name]: value });
     else await chrome.storage.local.remove(name);
@@ -290,6 +312,7 @@ async function init() {
   $('server-key').addEventListener('change', async (e) => {
     const key = e.target.value.trim() || defaultKey;
     e.target.value = key;
+    hasServerKey = !!key;
     await saveOrDefault('serverKey', key, defaultKey);
   });
 
@@ -309,6 +332,11 @@ select.addEventListener('change', async () => {
 // Played by the background script with the saved settings, so Supertonic voices work
 // here too; in the language picked for Supertonic.
 $('test').addEventListener('click', () => {
+  if (isServerVoice() && !hasServerKey) {
+    $('status').textContent = 'Add your server\'s key below';
+    $('server').open = true;
+    return;
+  }
   chrome.runtime.sendMessage({
     type: 'reader-sample',
     text: isSupertonic() ? SAMPLES[$('lang').value] : SAMPLES.en,

@@ -37,6 +37,9 @@ const SUPERTONIC_LANGS = new Set([
   'ja', 'ko', 'lt', 'lv', 'nl', 'pl', 'pt', 'ro', 'ru', 'sk', 'sl', 'sv', 'tr', 'uk', 'vi', 'na',
 ]);
 const SUPERTONIC = 'supertonic:'; // prefix of Supertonic voice names, e.g. "supertonic:F1"
+// Voices on the user's own Supertonic server only, not bundled with the extension
+// (keep in step with popup.js): they always read through the server.
+const SERVER_VOICES = new Set(['USER_FEMALE_01', 'USER_FEMALE_02', 'USER_FEMALE_03']);
 
 const settings = async () => ({
   voiceName: DEFAULT_VOICE, rate: DEFAULT_RATE, device: 'auto', highlight: true, supertonicSteps: 8,
@@ -67,12 +70,13 @@ async function serverConfig() {
   return key ? { url: serverUrl || DEFAULT_SERVER_URL, key } : null;
 }
 
-// The device to run Supertonic on. 'auto' uses the winner of the last speed test
-// (chrome.storage.local.supertonicBenchmark), if it won by 10% (a weak GPU can be
-// slower than the CPU, and the server isn't worth sending text to for a small gain);
-// otherwise it defers to the player, which prefers a real GPU (see backendFor in
-// offscreen.js). Without a server set up, 'server' means 'auto'.
-async function deviceFor(pref, server) {
+// The device to run Supertonic on. A server-only voice can only use the server. 'auto'
+// uses the winner of the last speed test (chrome.storage.local.supertonicBenchmark), if
+// it won by 10% (a weak GPU can be slower than the CPU, and the server isn't worth
+// sending text to for a small gain); otherwise it defers to the player, which prefers a
+// real GPU (see backendFor in offscreen.js). Without a server set up, 'server' means 'auto'.
+async function deviceFor(pref, server, voice) {
+  if (SERVER_VOICES.has(voice)) return 'server';
   if (pref === 'server') return server ? 'server' : 'auto';
   if (pref !== 'auto') return pref;
   const { supertonicBenchmark: benchmark } = await chrome.storage.local.get('supertonicBenchmark');
@@ -292,7 +296,8 @@ const supertonicEngine = {
     if (session !== s) return; // stopped while the document was being created
     toOffscreen({
       type: 'speak', id: s.id, chunks: s.chunks, voice: s.voice.supertonic,
-      rate: s.rate, device: s.device, steps: s.steps, lang: s.lang, server: s.server, start,
+      rate: s.rate, device: s.device, steps: s.steps, lang: s.lang, server: s.server,
+      serverOnly: s.serverOnly, start,
     });
   },
   pause: () => toOffscreen({ type: 'pause' }),
@@ -307,7 +312,8 @@ async function prepare() {
   const { voiceName, device } = await settings();
   if (!voiceName.startsWith(SUPERTONIC)) return;
   const server = await serverConfig();
-  const where = await deviceFor(device, server);
+  const where = await deviceFor(device, server, voiceName.slice(SUPERTONIC.length));
+  if (where === 'server' && !server) return; // nothing to warm until the server has a key
   await ensureOffscreen();
   toOffscreen({ type: 'load', device: where, server: where === 'server' ? server : null });
 }
@@ -386,7 +392,9 @@ async function read(tabId, { text, frameId = 0, fromPage = true }) {
   const voice = await pickVoice(prefs.voiceName);
   const engine = voice?.supertonic ? supertonicEngine : ttsEngine;
   const serverSetUp = engine === supertonicEngine ? await serverConfig() : null;
-  const device = engine === supertonicEngine ? await deviceFor(prefs.device, serverSetUp) : prefs.device;
+  const device = engine === supertonicEngine
+    ? await deviceFor(prefs.device, serverSetUp, voice.supertonic)
+    : prefs.device;
   const server = device === 'server' ? serverSetUp : null;
   const lang = langOf(prefs);
   const chunks = engine === supertonicEngine ? toSupertonicChunks(text, lang) : toChunks(text);
@@ -399,6 +407,7 @@ async function read(tabId, { text, frameId = 0, fromPage = true }) {
   });
   const s = (session = {
     id: nextId++, tabId, frameId, engine, chunks, voice, rate: prefs.rate, device, steps, lang, server,
+    serverOnly: SERVER_VOICES.has(voice?.supertonic),
     index: 1, total: chunks.length, paused: false,
     status: engine === ttsEngine ? null : 'Loading voice…',
     wordOffsets, highlight: prefs.highlight && fromPage && tabId != null,
