@@ -8,6 +8,7 @@ A Chrome and Edge extension that reads the text you select aloud, sentence by se
 - Supertonic reads in the language picked in the popup: English (the default) or any of its 30 other languages, such as Japanese or Dutch, or "Other or mixed" for text in other or several languages.
 - Supertonic runs on the GPU (WebGPU) or the CPU, or on [your own Supertonic server](#your-own-supertonic-server); the popup's speed test measures each, and Auto then uses whichever was clearly fastest.
 - Works inside iframes (e.g. e-learning lessons). Shortcuts: Alt+R read, Alt+P pause/resume, Alt+S stop.
+- The Read button can show on every site (the default) or only on sites you list in the popup, including their subdomains. A site is the one in the address bar, also for text in an iframe. Alt+R and the right-click menu read on every site.
 
 ## Set up
 
@@ -42,7 +43,7 @@ The server needs an OpenAI-compatible `POST /v1/audio/speech` that takes a beare
 | `selection-reader/manifest.json` | Extension manifest |
 | `selection-reader/background.js` | Service worker: reading sessions, system voices (`chrome.tts`), messages |
 | `selection-reader/page.js` | Floating Read button and player, word highlighting (runs in every frame) |
-| `selection-reader/popup.html`, `popup.js` | Settings: voice, language, speed, Supertonic quality, GPU/CPU/server and speed test, highlighting |
+| `selection-reader/popup.html`, `popup.js` | Settings: voice, language, speed, Supertonic quality, GPU/CPU/server and speed test, highlighting, Read button sites |
 | `selection-reader/offscreen.html` | Hidden page that runs Supertonic and plays its audio |
 | `src/offscreen.js` | Source of the Supertonic player (built into `selection-reader/offscreen.js`) |
 | `src/supertonic.js` | Supertonic 3 engine: four ONNX models, 8/16/24/32 denoising steps, 44.1 kHz |

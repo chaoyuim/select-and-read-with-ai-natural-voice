@@ -286,13 +286,45 @@
   bar.addEventListener('focusin', () => { focused = true; wake(); });
   bar.addEventListener('focusout', () => { focused = false; wake(); });
 
+  // ── Sites ───────────────────────────────────────────────
+  // The Read button can be limited to sites the user picks in the popup (buttonSites:
+  // 'all' or 'only', with buttonSiteList, e.g. ["skilljar.com"]). A site includes its
+  // subdomains, and is the address in the tab's address bar, also for text in an iframe
+  // (like an e-learning lesson). The shortcut and the context menu read on every site.
+  let buttonHere = true;
+  function siteOfTab() {
+    const top = location.ancestorOrigins?.[location.ancestorOrigins.length - 1] ?? location.href;
+    try {
+      return new URL(top).hostname.toLowerCase().replace(/^www\./, '');
+    } catch {
+      return '';
+    }
+  }
+  function applySites({ buttonSites = 'all', buttonSiteList = [] }) {
+    const site = siteOfTab();
+    buttonHere = buttonSites !== 'only' || buttonSiteList.some((d) => site === d || site.endsWith(`.${d}`));
+    if (!buttonHere && hasSelection) {
+      hasSelection = false;
+      update();
+    }
+  }
+  const loadSites = () => chrome.storage.sync.get(['buttonSites', 'buttonSiteList']).then(applySites);
+  try {
+    loadSites().catch(() => {});
+    chrome.storage.onChanged.addListener((changes, area) => {
+      if (area === 'sync' && (changes.buttonSites || changes.buttonSiteList)) loadSites().catch(() => {});
+    });
+  } catch {
+    // This copy was left over from an extension instance that has since been reloaded.
+  }
+
   // ── Events ──────────────────────────────────────────────
 
   // Show the Read button once a selection is finished (mouse released or keys let go).
   function onSelectEnd(e) {
     if (e.target === host) return; // clicks inside the widget
     setTimeout(() => {
-      hasSelection = !!selectedText();
+      hasSelection = buttonHere && !!selectedText();
       update();
       if (hasSelection) {
         placeAtSelection();

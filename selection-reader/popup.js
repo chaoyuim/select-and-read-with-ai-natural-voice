@@ -1,7 +1,8 @@
 // Selection Reader — popup: voice, speed, Supertonic's quality and where it runs
-// (with a speed test and the user's own server), and word highlighting. Everything is
-// saved to chrome.storage.sync as soon as it changes (the server's address and key to
-// chrome.storage.local); background.js reads it when reading starts.
+// (with a speed test and the user's own server), word highlighting, and the sites that
+// show the Read button. Everything is saved to chrome.storage.sync as soon as it changes
+// (the server's address and key to chrome.storage.local); background.js reads it when
+// reading starts, page.js for the Read button.
 
 const DEFAULT_VOICE = 'supertonic:F1'; // keep in step with background.js
 const DEFAULT_SERVER_URL = 'https://supertonic3.chaoyu.nl'; // likewise
@@ -208,6 +209,72 @@ chrome.storage.onChanged.addListener((changes, area) => {
   if (area === 'local' && changes.supertonicBenchmark) showBenchmark(changes.supertonicBenchmark.newValue);
 });
 
+// ── Read button: sites ───────────────────────────────────
+
+const SITES_HINTS = {
+  all: 'The Read button appears when you select text on any site.',
+  only: 'The Read button appears only on these sites and their subdomains. Elsewhere, Alt+R and the right-click menu still read.',
+};
+
+// A site as typed or taken from a tab ("https://www.Example.com/page", "example.com"):
+// its host without "www.", or '' if it isn't one.
+function siteName(text) {
+  const typed = text.trim().toLowerCase();
+  if (!typed) return '';
+  try {
+    const { hostname } = new URL(/^[a-z][a-z0-9+.-]*:\/\//.test(typed) ? typed : `https://${typed}`);
+    return /^[a-z0-9-]+(\.[a-z0-9-]+)*$/.test(hostname) ? hostname.replace(/^www\./, '') : '';
+  } catch {
+    return '';
+  }
+}
+
+let siteList = []; // sorted, e.g. ["skilljar.com"]
+let thisSite = ''; // the current tab's site, when the popup can see it (activeTab)
+
+async function saveSites(list) {
+  siteList = [...new Set(list)].sort();
+  await chrome.storage.sync.set({ buttonSiteList: siteList });
+  showSites();
+  saved();
+}
+
+function showSites() {
+  const items = siteList.map((site) => {
+    const item = document.createElement('li');
+    item.innerHTML = '<span></span><button type="button">Remove</button>';
+    item.querySelector('span').textContent = site;
+    const remove = item.querySelector('button');
+    remove.setAttribute('aria-label', `Remove ${site}`);
+    remove.addEventListener('click', () => saveSites(siteList.filter((s) => s !== site)));
+    return item;
+  });
+  if (!items.length) {
+    const empty = document.createElement('li');
+    empty.className = 'empty';
+    empty.textContent = 'No sites yet, so the Read button shows nowhere.';
+    items.push(empty);
+  }
+  $('site-list').replaceChildren(...items);
+  const listed = siteList.some((d) => thisSite === d || thisSite.endsWith(`.${d}`));
+  $('site-this').hidden = !thisSite || listed;
+  $('site-this').textContent = `Add this site (${thisSite})`;
+}
+
+function showSitesMode(mode) {
+  $('sites').hidden = mode !== 'only';
+  $('sites-hint').textContent = SITES_HINTS[mode];
+}
+
+function addTypedSite() {
+  const input = $('site-input');
+  const site = siteName(input.value);
+  input.setCustomValidity(site ? '' : 'Enter a site, like example.com');
+  if (!input.reportValidity()) return;
+  input.value = '';
+  saveSites([...siteList, site]);
+}
+
 // ── Setup ────────────────────────────────────────────────
 
 function saved() {
@@ -232,7 +299,9 @@ function segmented(container, options, current, onPick) {
 
 async function init() {
   const [prefs, voices, { supertonicBenchmark, serverUrl, serverKey }, defaultKey] = await Promise.all([
-    chrome.storage.sync.get(['voiceName', 'rate', 'device', 'highlight', 'supertonicSteps', 'supertonicLang']),
+    chrome.storage.sync.get([
+      'voiceName', 'rate', 'device', 'highlight', 'supertonicSteps', 'supertonicLang', 'buttonSites', 'buttonSiteList',
+    ]),
     chrome.tts.getVoices(),
     chrome.storage.local.get(['supertonicBenchmark', 'serverUrl', 'serverKey']),
     // The build's default key, if any (see background.js).
@@ -240,6 +309,7 @@ async function init() {
   ]);
   const {
     voiceName = DEFAULT_VOICE, rate = 1, device = 'auto', highlight = true, supertonicSteps = 8, supertonicLang = 'en',
+    buttonSites = 'all', buttonSiteList = [],
   } = prefs;
   devicePref = device;
   hasServerKey = !!(serverKey || defaultKey);
@@ -321,6 +391,23 @@ async function init() {
     await chrome.storage.sync.set({ highlight: e.target.checked });
     saved();
   });
+
+  // Read button: every site, or only the listed ones. Opening the popup from the
+  // toolbar lets it see the current tab's address (activeTab), for "Add this site".
+  for (const input of document.querySelectorAll('#sites-mode input')) input.checked = input.value === buttonSites;
+  showSitesMode(buttonSites);
+  $('sites-mode').addEventListener('change', async (e) => {
+    await chrome.storage.sync.set({ buttonSites: e.target.value });
+    showSitesMode(e.target.value);
+    saved();
+  });
+  siteList = [...buttonSiteList].sort();
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true }).catch(() => []);
+  thisSite = /^https?:/.test(tab?.url ?? '') ? siteName(tab.url) : '';
+  showSites();
+  $('site-add').addEventListener('click', addTypedSite);
+  $('site-input').addEventListener('keydown', (e) => e.key === 'Enter' && addTypedSite());
+  $('site-this').addEventListener('click', () => saveSites([...siteList, thisSite]));
 }
 
 select.addEventListener('change', async () => {
