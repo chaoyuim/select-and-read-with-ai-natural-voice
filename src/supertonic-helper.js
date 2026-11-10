@@ -360,11 +360,11 @@ export class TextToSpeech {
 /**
  * Load voice style from JSON files
  */
-export async function loadVoiceStyle(voiceStylePaths, verbose = false) {
+export async function loadVoiceStyle(voiceStylePaths, verbose = false, fetchFile = fetch) {
     const bsz = voiceStylePaths.length;
     
     // Read first file to get dimensions
-    const firstResponse = await fetch(voiceStylePaths[0]);
+    const firstResponse = await fetchFile(voiceStylePaths[0]);
     const firstStyle = await firstResponse.json();
     
     const ttlDims = firstStyle.style_ttl.dims;
@@ -383,7 +383,7 @@ export async function loadVoiceStyle(voiceStylePaths, verbose = false) {
     
     // Fill in the data
     for (let i = 0; i < bsz; i++) {
-        const response = await fetch(voiceStylePaths[i]);
+        const response = await fetchFile(voiceStylePaths[i]);
         const voiceStyle = await response.json();
         
         // Flatten TTL data
@@ -413,8 +413,8 @@ export async function loadVoiceStyle(voiceStylePaths, verbose = false) {
 /**
  * Load configuration from JSON
  */
-export async function loadCfgs(onnxDir) {
-    const response = await fetch(`${onnxDir}/tts.json`);
+export async function loadCfgs(fetchFile) {
+    const response = await fetchFile('onnx/tts.json');
     const cfgs = await response.json();
     return cfgs;
 }
@@ -422,8 +422,8 @@ export async function loadCfgs(onnxDir) {
 /**
  * Load text processor
  */
-export async function loadTextProcessor(onnxDir) {
-    const response = await fetch(`${onnxDir}/unicode_indexer.json`);
+export async function loadTextProcessor(fetchFile) {
+    const response = await fetchFile('onnx/unicode_indexer.json');
     const indexer = await response.json();
     return new UnicodeProcessor(indexer);
 }
@@ -431,23 +431,26 @@ export async function loadTextProcessor(onnxDir) {
 /**
  * Load ONNX model
  */
-export async function loadOnnx(onnxPath, options) {
-    const session = await ort.InferenceSession.create(onnxPath, options);
+export async function loadOnnx(fetchFile, onnxPath, options) {
+    const model = new Uint8Array(await (await fetchFile(onnxPath)).arrayBuffer());
+    const session = await ort.InferenceSession.create(model, options);
     return session;
 }
 
 /**
  * Load all TTS components
  */
-export async function loadTextToSpeech(onnxDir, sessionOptions = {}, progressCallback = null) {
+// Selection Reader: files come from fetchFile(path), e.g. fetchFile('onnx/tts.json') → Response,
+// so they can be bundled or downloaded (see models.js).
+export async function loadTextToSpeech(fetchFile, sessionOptions = {}, progressCallback = null) {
     console.log('Using WebAssembly/WebGPU for inference');
     
-    const cfgs = await loadCfgs(onnxDir);
+    const cfgs = await loadCfgs(fetchFile);
     
-    const dpPath = `${onnxDir}/duration_predictor.onnx`;
-    const textEncPath = `${onnxDir}/text_encoder.onnx`;
-    const vectorEstPath = `${onnxDir}/vector_estimator.onnx`;
-    const vocoderPath = `${onnxDir}/vocoder.onnx`;
+    const dpPath = 'onnx/duration_predictor.onnx';
+    const textEncPath = 'onnx/text_encoder.onnx';
+    const vectorEstPath = 'onnx/vector_estimator.onnx';
+    const vocoderPath = 'onnx/vocoder.onnx';
     
     const modelPaths = [
         { name: 'Duration Predictor', path: dpPath },
@@ -461,13 +464,13 @@ export async function loadTextToSpeech(onnxDir, sessionOptions = {}, progressCal
         if (progressCallback) {
             progressCallback(modelPaths[i].name, i + 1, modelPaths.length);
         }
-        const session = await loadOnnx(modelPaths[i].path, sessionOptions);
+        const session = await loadOnnx(fetchFile, modelPaths[i].path, sessionOptions);
         sessions.push(session);
     }
     
     const [dpOrt, textEncOrt, vectorEstOrt, vocoderOrt] = sessions;
     
-    const textProcessor = await loadTextProcessor(onnxDir);
+    const textProcessor = await loadTextProcessor(fetchFile);
     const textToSpeech = new TextToSpeech(cfgs, textProcessor, dpOrt, textEncOrt, vectorEstOrt, vocoderOrt);
     
     return { textToSpeech, cfgs };

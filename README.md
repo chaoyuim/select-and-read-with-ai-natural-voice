@@ -4,7 +4,7 @@ A Chrome and Edge extension that reads the text you select aloud, sentence by se
 
 - Select text and click the floating **▶ Read** button; it turns into a player (pause, speed, stop). Supertonic speaks Slow and Fast at that pace itself rather than stretching the audio.
 - Each word is highlighted as it's read.
-- Voices: Supertonic 3 (local and offline, ten voices, default **F1**, quality 8 to 32 denoising steps), plus **USER_FEMALE_01** to **USER_FEMALE_03**, which run on your Supertonic server only (see [below](#your-own-supertonic-server)), the system's Premium/Enhanced voices, and Edge's Microsoft Natural voices in Edge.
+- Voices: Supertonic 3 (local and offline, ten voices, default **F1**, quality 8 to 32 denoising steps), plus any voices only your own Supertonic server has (see [below](#your-own-supertonic-server)), the system's Premium/Enhanced voices, and Edge's Microsoft Natural voices in Edge.
 - Supertonic reads in the language picked in the popup: English (the default) or any of its 30 other languages, such as Japanese or Dutch, or "Other or mixed" for text in other or several languages.
 - Supertonic runs on the GPU (WebGPU) or the CPU, or on [your own Supertonic server](#your-own-supertonic-server); the popup's speed test measures each, and Auto then uses whichever was clearly fastest.
 - Works inside iframes (e.g. e-learning lessons). Shortcuts: Alt+R read, Alt+P pause/resume, Alt+S stop.
@@ -21,7 +21,7 @@ npm run build
 
 `npm run build` bundles the Supertonic player into `selection-reader/offscreen.js`, copies the ONNX runtime into `selection-reader/vendor/`, and downloads Supertonic 3 and its ten voices (~400 MB) into `selection-reader/models/` so they work offline. These generated files aren't in the repository.
 
-Optionally, to have the [default server](#your-own-supertonic-server)'s API key filled in, put it in `server.local.json` next to `build.mjs` before building: `{ "key": "…" }`. Git ignores that file and the copy the build makes, so the key isn't published.
+Optionally, to have [your own server](#your-own-supertonic-server) filled in, put it in `server.local.json` next to `build.mjs` before building: `{ "key": "…", "url": "https://…", "voices": ["USER_FEMALE_01"] }` (`url` and `voices` default to the ones in `build.mjs`). Git ignores that file and the copy the build makes (`selection-reader/server-default.json`), so the key isn't published.
 
 Then load the extension:
 
@@ -30,9 +30,22 @@ Then load the extension:
 
 After changing files, click the extension's **Reload** button rather than removing and re-adding it: removing deletes its stored data (settings, speed test). Tabs that were already open keep the previous copy of the content script, so refresh them (or press Alt+R once) to pick up the new one.
 
+## Store package
+
+```bash
+npm run build:store
+```
+
+makes `dist/selection-reader-<version>.zip` (about 5 MB) for the Chrome Web Store and Microsoft Edge Add-ons. It's the same extension without the voice models and without your server:
+
+- The Supertonic 3 model is downloaded once from Hugging Face, at a fixed revision (`src/models.js`), the first time the voice runs; the player shows "Downloading voice N%". It's kept in the extension's Cache Storage (`unlimitedStorage`), so it works offline afterwards and goes away with the extension.
+- The server's address, key and server-only voices are empty: users with a server enter its address and key in the popup.
+
+The listing text, permission justifications and reviewer notes are in [store/listing.md](store/listing.md), the screenshots and promo tile in `store/`, and the privacy policy in [PRIVACY.md](PRIVACY.md).
+
 ## Your own Supertonic server
 
-Under **Supertonic runs on**, **Server** sends the text to a Supertonic server of your own (for example on a machine with a big GPU) and plays the speech it returns. It's the same model and voices, so it sounds the same. It helps most on computers without a fast graphics card, where 16 or more steps can't keep up locally. The address defaults to `https://supertonic3.chaoyu.nl`; change it and enter the API key in the popup (or build with a default key, see [Set up](#set-up)). The key is kept in that browser only (`chrome.storage.local`), and the text you read is sent to the server. The speech it returns (FLAC) is only held in memory while it plays; nothing is saved.
+Under **Supertonic runs on**, **Server** sends the text to a Supertonic server of your own (for example on a machine with a big GPU) and plays the speech it returns. It's the same model and voices, so it sounds the same. It helps most on computers without a fast graphics card, where 16 or more steps can't keep up locally. Enter its address and API key in the popup, or build them in with `server.local.json` (see [Set up](#set-up)); a personal build defaults to `https://supertonic3.chaoyu.nl`, the store package to none. Voices listed under `voices` there, which only the server has, always read through it. The key is kept in that browser only (`chrome.storage.local`), and the text you read is sent to the server. The speech it returns (FLAC) is only held in memory while it plays; nothing is saved.
 
 The server needs an OpenAI-compatible `POST /v1/audio/speech` that takes a bearer key and Supertonic's options (`voice` F1–M5, `steps`, `speed`, `lang`, `response_format: "flac"`), and it must allow cross-origin requests (CORS). If it can't be reached or rejects the key, the rest of that reading is made on your computer instead.
 
@@ -48,12 +61,15 @@ The server needs an OpenAI-compatible `POST /v1/audio/speech` that takes a beare
 | `src/offscreen.js` | Source of the Supertonic player (built into `selection-reader/offscreen.js`) |
 | `src/supertonic.js` | Supertonic 3 engine: four ONNX models, 8/16/24/32 denoising steps, 44.1 kHz |
 | `src/supertonic-helper.js` | Supertonic's browser helper (MIT) |
+| `src/models.js` | Where the Supertonic files come from: bundled, or downloaded once and cached (store package) |
 | `src/server.js` | Supertonic on your own server (OpenAI-compatible API) |
-| `build.mjs` | Build script |
+| `build.mjs` | Build script (`npm run build`, `npm run build:store`) |
+| `selection-reader/THIRD_PARTY_NOTICES.txt` | Licences of the bundled third-party software |
+| `PRIVACY.md`, `store/` | Privacy policy, store listing and images |
 
 ## Third-party software
 
-Supertonic 3 runs on [ONNX Runtime Web](https://github.com/microsoft/onnxruntime) (MIT) through the [Supertonic](https://github.com/supertone-inc/supertonic) browser example (MIT), with the [Supertonic 3](https://huggingface.co/Supertone/supertonic-3) model weights (OpenRAIL-M). The weights are downloaded by `npm run build` and are not part of the MIT-licensed source.
+Supertonic 3 runs on [ONNX Runtime Web](https://github.com/microsoft/onnxruntime) (MIT) through the [Supertonic](https://github.com/supertone-inc/supertonic) browser example (MIT), with the [Supertonic 3](https://huggingface.co/Supertone/supertonic-3) model weights (OpenRAIL-M). The weights are downloaded by `npm run build` (or by the store package on first use) and are not part of the MIT-licensed source. See `selection-reader/THIRD_PARTY_NOTICES.txt`.
 
 ## License
 

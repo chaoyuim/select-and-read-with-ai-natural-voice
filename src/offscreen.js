@@ -6,10 +6,22 @@
 // previous one plays. Built into selection-reader/offscreen.js by `npm run build`.
 import { loadSupertonic, speakSupertonic, cpuThreads } from './supertonic.js';
 import { speakServer, warmServer } from './server.js';
+import { onDownloadProgress, removeOldModels } from './models.js';
 
 const post = (msg) => chrome.runtime.sendMessage({ type: 'voice-event', ...msg }).catch(() => {});
 
 // ── Model ────────────────────────────────────────────────
+// A store build downloads the model on first use (models.js): show the progress on the
+// reading that's waiting for it, at most once per percent.
+let shownPercent = -1;
+onDownloadProgress(({ loaded, total }) => {
+  const percent = Math.floor((loaded / total) * 100);
+  if (percent === shownPercent || !current || current.cancelled) return;
+  shownPercent = percent;
+  post({ id: current.id, event: 'download', percent });
+});
+removeOldModels().catch(() => {});
+
 // device: 'gpu' (WebGPU), 'cpu' (WebAssembly, multi-threaded since the page is
 // cross-origin isolated, see manifest.json), 'auto', or 'server' (see synthesize).
 // Auto skips "fallback" adapters (software rendering, e.g. a PC without a graphics

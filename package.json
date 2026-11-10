@@ -5,7 +5,8 @@
   "license": "MIT",
   "type": "module",
   "scripts": {
-    "build": "node build.mjs"
+    "build": "node build.mjs",
+    "build:store": "node build.mjs --store"
   },
   "devDependencies": {
     "esbuild": "0.28.2"

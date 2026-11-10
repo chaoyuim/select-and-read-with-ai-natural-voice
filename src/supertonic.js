@@ -5,9 +5,7 @@
 // the model weights are OpenRAIL-M (see README).
 import * as ort from 'onnxruntime-web';
 import { loadTextToSpeech, loadVoiceStyle, writeWavFile } from './supertonic-helper.js';
-
-const ONNX_DIR = chrome.runtime.getURL('models/supertonic/onnx');
-const VOICE_DIR = chrome.runtime.getURL('models/supertonic/voice_styles');
+import { modelFile } from './models.js';
 const VOICES = new Set(['F1', 'F2', 'F3', 'F4', 'F5', 'M1', 'M2', 'M3', 'M4', 'M5']);
 // The popup picks. More steps sound cleaner but take longer, in proportion: on an M5,
 // 8 steps is ~22x real time on the GPU and ~2x on the CPU, so above 8 needs the GPU.
@@ -34,7 +32,7 @@ export function loadSupertonic(backend = 'wasm') {
   const previous = loaded;
   const promise = (async () => {
     await previous?.promise.then(release).catch(() => {});
-    const { textToSpeech } = await loadTextToSpeech(ONNX_DIR, {
+    const { textToSpeech } = await loadTextToSpeech(modelFile, {
       executionProviders: [backend],
       graphOptimizationLevel: 'all',
     });
@@ -50,7 +48,7 @@ function loadStyle(voice) {
   if (!VOICES.has(voice)) return Promise.reject(new Error(`Unknown Supertonic voice: ${voice}`));
   let promise = styles.get(voice);
   if (!promise) {
-    promise = loadVoiceStyle([`${VOICE_DIR}/${voice}.json`], false);
+    promise = loadVoiceStyle([`voice_styles/${voice}.json`], false, modelFile);
     promise.catch(() => styles.delete(voice));
     styles.set(voice, promise);
   }

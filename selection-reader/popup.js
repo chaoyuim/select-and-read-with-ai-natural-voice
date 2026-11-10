@@ -5,7 +5,6 @@
 // reading starts, page.js for the Read button.
 
 const DEFAULT_VOICE = 'supertonic:F1'; // keep in step with background.js
-const DEFAULT_SERVER_URL = 'https://supertonic3.chaoyu.nl'; // likewise
 // Keep in step with SPEEDS in background.js.
 const SPEEDS = [
   { label: 'Slow', rate: 0.9 },
@@ -15,10 +14,10 @@ const SPEEDS = [
 const $ = (id) => document.getElementById(id);
 const select = $('voice');
 
-// Supertonic 3's ten preset voices (F1-F5 female, M1-M5 male); all are bundled. The
-// server-only ones (keep in step with background.js) are on the user's own server.
-const SERVER_VOICES = new Set(['USER_FEMALE_01', 'USER_FEMALE_02', 'USER_FEMALE_03']);
-const SUPERTONIC_VOICES = ['F1', 'F2', 'F3', 'F4', 'F5', 'M1', 'M2', 'M3', 'M4', 'M5', ...SERVER_VOICES].map((id) => ({
+// Supertonic 3's ten preset voices (F1-F5 female, M1-M5 male), plus any the build's
+// server has that aren't bundled (server-default.json, see background.js).
+let SERVER_VOICES = new Set();
+const supertonicVoices = () => ['F1', 'F2', 'F3', 'F4', 'F5', 'M1', 'M2', 'M3', 'M4', 'M5', ...SERVER_VOICES].map((id) => ({
   id,
   value: `supertonic:${id}`,
   text: `${id} (${id.startsWith('F') || id.includes('FEMALE') ? 'female' : 'male'}${SERVER_VOICES.has(id) ? ', server' : ''})`,
@@ -298,15 +297,17 @@ function segmented(container, options, current, onPick) {
 }
 
 async function init() {
-  const [prefs, voices, { supertonicBenchmark, serverUrl, serverKey }, defaultKey] = await Promise.all([
+  const [prefs, voices, { supertonicBenchmark, serverUrl, serverKey }, defaults] = await Promise.all([
     chrome.storage.sync.get([
       'voiceName', 'rate', 'device', 'highlight', 'supertonicSteps', 'supertonicLang', 'buttonSites', 'buttonSiteList',
     ]),
     chrome.tts.getVoices(),
     chrome.storage.local.get(['supertonicBenchmark', 'serverUrl', 'serverKey']),
-    // The build's default key, if any (see background.js).
-    fetch('server-default.json').then((r) => r.json()).then((d) => d.key || '', () => ''),
+    // The build's server, if any (see background.js).
+    fetch('server-default.json').then((r) => r.json(), () => ({})),
   ]);
+  const { url: defaultUrl = '', key: defaultKey = '', voices: serverVoices = [] } = defaults;
+  SERVER_VOICES = new Set(serverVoices);
   const {
     voiceName = DEFAULT_VOICE, rate = 1, device = 'auto', highlight = true, supertonicSteps = 8, supertonicLang = 'en',
     buttonSites = 'all', buttonSiteList = [],
@@ -325,7 +326,7 @@ async function init() {
   const shown = voices
     .filter((v) => (isNatural(v) && inMyLanguage(v)) || v.voiceName === voiceName)
     .sort(byName);
-  addGroup('Supertonic', SUPERTONIC_VOICES, voiceName);
+  addGroup('Supertonic', supertonicVoices(), voiceName);
   addGroup('System voices', shown.filter((v) => !v.remote).map(toItem), voiceName);
   addGroup('Online', shown.filter((v) => v.remote).map(toItem), voiceName);
   showVoiceSettings();
@@ -364,7 +365,7 @@ async function init() {
   // The server's address and key, or the defaults; open while the server is picked
   // but has no key. Emptying a field goes back to its default, which isn't stored, so
   // a new default in a later version applies.
-  $('server-url').value = serverUrl || DEFAULT_SERVER_URL;
+  $('server-url').value = serverUrl || defaultUrl;
   $('server-key').value = serverKey || defaultKey;
   const saveOrDefault = async (name, value, fallback) => {
     if (value && value !== fallback) await chrome.storage.local.set({ [name]: value });
@@ -373,11 +374,11 @@ async function init() {
   };
   $('server-url').addEventListener('change', async (e) => {
     const typed = e.target.value.trim();
-    const url = typed ? serverAddress(typed) : DEFAULT_SERVER_URL;
-    e.target.setCustomValidity(url ? '' : 'Enter a web address, like https://tts.example.com');
+    const url = typed ? serverAddress(typed) : defaultUrl;
+    e.target.setCustomValidity(url || !typed ? '' : 'Enter a web address, like https://tts.example.com');
     if (!e.target.reportValidity()) return;
     e.target.value = url;
-    await saveOrDefault('serverUrl', url, DEFAULT_SERVER_URL);
+    await saveOrDefault('serverUrl', url, defaultUrl);
   });
   $('server-key').addEventListener('change', async (e) => {
     const key = e.target.value.trim() || defaultKey;

@@ -37,9 +37,6 @@ const SUPERTONIC_LANGS = new Set([
   'ja', 'ko', 'lt', 'lv', 'nl', 'pl', 'pt', 'ro', 'ru', 'sk', 'sl', 'sv', 'tr', 'uk', 'vi', 'na',
 ]);
 const SUPERTONIC = 'supertonic:'; // prefix of Supertonic voice names, e.g. "supertonic:F1"
-// Voices on the user's own Supertonic server only, not bundled with the extension
-// (keep in step with popup.js): they always read through the server.
-const SERVER_VOICES = new Set(['USER_FEMALE_01', 'USER_FEMALE_02', 'USER_FEMALE_03']);
 
 const settings = async () => ({
   voiceName: DEFAULT_VOICE, rate: DEFAULT_RATE, device: 'auto', highlight: true, supertonicSteps: 8,
@@ -53,21 +50,28 @@ const stepsOf = (prefs) => (SUPERTONIC_STEPS.has(Number(prefs.supertonicSteps)) 
 // The language Supertonic reads in: the saved choice, or English.
 const langOf = (prefs) => (SUPERTONIC_LANGS.has(prefs.supertonicLang) ? prefs.supertonicLang : 'en');
 
-// The Supertonic server to use unless the popup sets another (keep in step with
-// popup.js), and its API key if the build was given one: server-default.json, made by
-// build.mjs from server.local.json. Git ignores both, so the key isn't published.
-const DEFAULT_SERVER_URL = 'https://supertonic3.chaoyu.nl';
-let defaultServerKey = null;
-const getDefaultServerKey = () =>
-  (defaultServerKey ??= fetch(chrome.runtime.getURL('server-default.json'))
+// The build's Supertonic server, used unless the popup sets another: server-default.json,
+// { url, key, voices }, made by build.mjs (from server.local.json for a personal build;
+// empty for the store build). voices are ones only that server has, not bundled with
+// the extension: they always read through the server. Git ignores both files, so the
+// key isn't published.
+let serverDefaults = null;
+const getServerDefaults = () =>
+  (serverDefaults ??= fetch(chrome.runtime.getURL('server-default.json'))
     .then((r) => r.json())
-    .then((d) => d.key || '', () => ''));
+    .then(
+      (d) => ({ url: d.url || '', key: d.key || '', voices: new Set(d.voices ?? []) }),
+      () => ({ url: '', key: '', voices: new Set() }),
+    ));
+const isServerVoice = async (voice) => (await getServerDefaults()).voices.has(voice);
 
-// The Supertonic server, { url, key }, or null when there's no key for it.
+// The Supertonic server, { url, key }, or null when there's no address or key for it.
 async function serverConfig() {
   const { serverUrl, serverKey } = await chrome.storage.local.get(['serverUrl', 'serverKey']);
-  const key = serverKey || (await getDefaultServerKey());
-  return key ? { url: serverUrl || DEFAULT_SERVER_URL, key } : null;
+  const defaults = await getServerDefaults();
+  const url = serverUrl || defaults.url;
+  const key = serverKey || defaults.key;
+  return url && key ? { url, key } : null;
 }
 
 // The device to run Supertonic on. A server-only voice can only use the server. 'auto'
@@ -76,7 +80,7 @@ async function serverConfig() {
 // sending text to for a small gain); otherwise it defers to the player, which prefers a
 // real GPU (see backendFor in offscreen.js). Without a server set up, 'server' means 'auto'.
 async function deviceFor(pref, server, voice) {
-  if (SERVER_VOICES.has(voice)) return 'server';
+  if (await isServerVoice(voice)) return 'server';
   if (pref === 'server') return server ? 'server' : 'auto';
   if (pref !== 'auto') return pref;
   const { supertonicBenchmark: benchmark } = await chrome.storage.local.get('supertonicBenchmark');
@@ -407,7 +411,7 @@ async function read(tabId, { text, frameId = 0, fromPage = true }) {
   });
   const s = (session = {
     id: nextId++, tabId, frameId, engine, chunks, voice, rate: prefs.rate, device, steps, lang, server,
-    serverOnly: SERVER_VOICES.has(voice?.supertonic),
+    serverOnly: !!voice?.supertonic && (await isServerVoice(voice.supertonic)),
     index: 1, total: chunks.length, paused: false,
     status: engine === ttsEngine ? null : 'Loading voice…',
     wordOffsets, highlight: prefs.highlight && fromPage && tabId != null,
@@ -507,12 +511,18 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     const s = session;
     if (!s || s.id !== msg.id) return; // a reading that was replaced or stopped
     if (msg.event === 'loading' && s.index === 1) s.status = 'Loading voice…';
+    // First use of a store build: the voice (~400 MB) is downloading.
+    if (msg.event === 'download' && s.status) s.status = `Downloading voice ${msg.percent}%`;
     if (msg.event === 'word') return wordReached(s, msg.index, msg.word);
     if (msg.event === 'start') return sentenceStarted(s, msg.index);
     if (msg.event === 'end') return finish();
     if (msg.event === 'error') {
       console.warn('[Selection Reader] Supertonic error:', msg.message);
-      return finish();
+      // Say so in the player for a few seconds, rather than just vanishing.
+      s.status = /download/i.test(msg.message) ? 'Voice download failed' : 'Couldn\'t read this';
+      updateBar(s, barState(s));
+      setTimeout(() => session === s && finish(), 4000);
+      return;
     }
     updateBar(s, barState(s));
   }
